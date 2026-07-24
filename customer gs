@@ -1,0 +1,21 @@
+function addCustomerToRaw() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+
+  const form = ss.getSheetByName("+ Create Customer");
+  const raw = ss.getSheetByName("Customer Raw Data");
+
+  const name = form.getRange("B2").getValue();
+  const address = form.getRange("B3").getValue();
+  const phone = form.getRange("B4").getValue();
+
+  if (!name) return;
+
+  const timestamp = new Date();
+
+  raw.appendRow([
+    timestamp, // ✅ Column A
+    name,      // Column B
+    address,   // Column C
+    phone      // Column D
+  ]);
+}
