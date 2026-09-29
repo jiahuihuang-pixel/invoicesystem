@@ -57,14 +57,22 @@ export default async function handler(req, res) {
     const info = await tg('getWebhookInfo');
     if (info.last_error_message) out.push(`⚠️ Telegram's last delivery error (may be old): ${info.last_error_message}`);
 
-    // Sheet
+    // Sheet (the Countries headers it found are listed to catch typos)
+    ok(`Reading spreadsheet ${env('SPREADSHEET_ID')} (app version: letterhead styles)`);
     const t = await readTables([CONFIG.TRACKER_SHEET, CONFIG.PRODUCTS_SHEET, CONFIG.CUSTOMERS_SHEET, CONFIG.COUNTRIES_SHEET]);
     let countries = [];
     try {
       countries = parseCountries(t[CONFIG.COUNTRIES_SHEET]);
+      out.push(`     Countries tab columns: ${t[CONFIG.COUNTRIES_SHEET].headers.filter(Boolean).join(' | ')}`);
       for (const c of countries) {
-        if (c.ready) ok(`${c.name}: ready (${c.currency}, ${c.taxRate > 1 ? Math.round((c.taxRate - 1) * 1000) / 10 + '% GST' : 'no tax'}, ${c.layout} layout)`);
-        else out.push(`⚠️ ${c.name}: not ready, greyed out in the form` +
+        if (c.ready) { ok(`${c.name}: ready (${c.currency}, ${c.taxRate > 1 ? Math.round((c.taxRate - 1) * 1000) / 10 + '% ' + c.taxName : 'no tax'}, ${c.layout} layout, ${c.company.headerStyle} header)`);
+        // What the letterhead will print, so a wrong or missing column shows up here
+        const C = c.company;
+        out.push(`     letterhead: ` + [
+          ['Company Name', C.name], ['Reg No Label', C.regLabel], ['GST Reg No', C.gstRegNo], ['Address', C.store],
+          ['Tel', C.tel], ['Website', C.website], ['Email', C.email], ['Stamp', C.stamp], ['Invoice Title', C.invoiceTitle]
+        ].map(([k, v]) => `${k}=${v ? '"' + (v.length > 40 ? v.slice(0, 40) + '…' : v) + '"' : '(blank)'}`).join(', '));
+        } else out.push(`⚠️ ${c.name}: not ready, greyed out in the form` +
                       (c.missing.length ? ` (Countries tab is missing ${c.missing.join(', ')})` : ' (Ready is not ticked)'));
       }
       if (!countries.some((c) => c.ready)) bad('No country is ready, so the form has nothing to offer');
