@@ -5,17 +5,24 @@
  *   /invoice   opens the request form (in a group or a private chat)
  *   /pending   admins: everything still waiting on you
  *   /whoami    your user ID and this chat's ID
+ *   /convert <no>  turn a sent proforma into a tax invoice. Admins: done at
+ *              once. Managers: asks the admins.
  *
  * Buttons on the PDF you receive
  *   ✅ Approve     posts the PDF to the group it was requested from
  *   🔁 Regenerate  rebuilds it from the Tracker row, after you fix the row
  *   ❌ Reject      asks for a reason and tells the requester
+ *
+ * Under a proforma posted in the group
+ *   🧾 Convert to tax invoice   a manager asks; you get ✅ Convert and send
+ *                               (which posts the tax invoice to the group)
+ *                               or ❌ Not yet
  */
 import { CONFIG, env, isAdmin, appUrl } from '../lib/config.js';
 import { tg, send, answer, kb, esc, startParamForGroup } from '../lib/telegram.js';
 import {
   rememberChat, forgetChat, findRequest, listOpenRequests, generateAndOffer,
-  approve, reject, isClosed, adminButtons
+  approve, reject, isClosed, adminButtons, requestConversion, declineConversion, convertToInvoice
 } from '../lib/workflow.js';
 import { readJson } from '../lib/http.js';
 
@@ -89,8 +96,15 @@ async function onMessage(msg) {
       if (!isAdmin(msg.from.id)) return;
       return showPending(chat.id);
 
+    case 'convert': {
+      const id = text.split(/\s+/)[1];
+      if (!id) return send(chat.id, 'Send /convert followed by the proforma number, e.g. /convert TCHK26092901');
+      return convertCommand(msg, id);
+    }
+
     case 'help':
-      return send(chat.id, 'Send /invoice to request an invoice.' +
+      return send(chat.id, 'Send /invoice to request an invoice.\n' +
+                           '/convert <number> turns a paid proforma into a tax invoice.' +
                            (isAdmin(msg.from.id) ? '\n/pending shows what is waiting for your approval.' : ''));
   }
 }
@@ -133,10 +147,53 @@ async function showPending(chatId) {
 }
 
 
+/* Proforma -> tax invoice ---------------------------------------------------- */
+
+/** /convert <no>: admins convert straight away, anyone else asks the admins. */
+async function convertCommand(msg, id) {
+  if (isAdmin(msg.from.id)) {
+    const { newId, req } = await convertToInvoice(id);
+    return send(msg.chat.id, `✅ #${esc(id)} is now tax invoice <b>#${esc(newId)}</b>, sent to ${esc(req.chatTitle)}.`);
+  }
+  await requestConversion(id, msg.from);
+  return send(msg.chat.id, `Asked the admin to turn proforma <b>#${esc(id)}</b> into a tax invoice. ` +
+                           'It will be posted here once done.');
+}
+
+async function onConvertButton(cb, act, rest) {
+  const [id, day] = rest;
+
+  if (act === 'req') {                          // tapped under the proforma in the group
+    if (isAdmin(cb.from.id)) {
+      await answer(cb.id, 'Converting…');
+      const { newId } = await convertToInvoice(id);
+      return stamp(cb.message, `✅ Converted to tax invoice #${newId} ${when()}`);
+    }
+    await requestConversion(id, cb.from);
+    await answer(cb.id, 'Asked the admin. The tax invoice will be posted here.', true);
+    return stamp(cb.message, `⏳ Tax invoice requested by ${cb.from.first_name || 'a manager'} ${when()}`);
+  }
+
+  if (!isAdmin(cb.from.id)) return answer(cb.id, 'Admins only.', true);
+  if (act === 'ok') {
+    await answer(cb.id, 'Converting and sending…');
+    const { newId, req } = await convertToInvoice(id, day);
+    return stamp(cb.message, `✅ Tax invoice #${newId} sent to ${req.chatTitle} ${when()}`);
+  }
+  if (act === 'no') {
+    await answer(cb.id);
+    await declineConversion(id);
+    return stamp(cb.message, `❌ Not converted ${when()}`);
+  }
+  return answer(cb.id);
+}
+
+
 /* Buttons ------------------------------------------------------------------- */
 
 async function onButton(cb) {
   const [kind, act, ...rest] = String(cb.data || '').split(':');
+  if (kind === 'c') return onConvertButton(cb, act, rest);
   if (kind !== 'a') return answer(cb.id);
   if (!isAdmin(cb.from.id)) return answer(cb.id, 'Admins only.', true);
 
@@ -144,8 +201,9 @@ async function onButton(cb) {
   const req = await findRequest(id);
   if (!req) return answer(cb.id, `Unknown request #${id}`, true);
   if (isClosed(req)) {
-    await stamp(cb.message, `Already ${req.status.toLowerCase()}.`);
-    return answer(cb.id, `Already ${req.status.toLowerCase()}.`, true);
+    const state = req.convertedTo ? `converted to #${req.convertedTo}` : req.status.toLowerCase();
+    await stamp(cb.message, `Already ${state}.`);
+    return answer(cb.id, `Already ${state}.`, true);
   }
 
   switch (act) {

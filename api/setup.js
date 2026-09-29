@@ -10,6 +10,7 @@ import { parseCountries } from '../lib/countries.js';
 import crypto from 'node:crypto';
 import { tg } from '../lib/telegram.js';
 import { readTables, headerIndex } from '../lib/sheets.js';
+import { ensureTrackerColumns } from '../lib/workflow.js';
 
 export default async function handler(req, res) {
   // Compare fixed-length hashes so the check takes the same time either way
@@ -40,6 +41,7 @@ export default async function handler(req, res) {
 
     await tg('setMyCommands', { commands: [
       { command: 'invoice', description: 'Request an invoice' },
+      { command: 'convert', description: 'Turn a paid proforma into a tax invoice' },
       { command: 'whoami', description: 'Show my Telegram ID' }
     ] });
     for (const id of adminIds()) {
@@ -48,6 +50,7 @@ export default async function handler(req, res) {
         commands: [
           { command: 'invoice', description: 'Request an invoice' },
           { command: 'pending', description: 'Requests waiting for approval' },
+          { command: 'convert', description: 'Turn a proforma into a tax invoice' },
           { command: 'whoami', description: 'Show my Telegram ID' }
         ]
       }).then(() => ok(`Admin ${id}: commands set`))
@@ -81,6 +84,9 @@ export default async function handler(req, res) {
     if (!tr) bad(`No "${CONFIG.TRACKER_SHEET}" tab`);
     else {
       ok(`Tracker: ${tr.rows.length} rows`);
+      const before = tr.headers.length;
+      tr.headers = await ensureTrackerColumns();
+      if (tr.headers.length > before) ok(`Tracker: added columns ${tr.headers.slice(before).join(', ')}`);
       const missing = Object.values(CONFIG.TRACKER).filter((h) => headerIndex(tr.headers, h) < 0);
       if (missing.length) out.push(`⚠️ Tracker columns not found (these values will not be saved): ${missing.join(', ')}`);
     }
