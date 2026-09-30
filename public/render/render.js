@@ -131,6 +131,11 @@ export async function renderInvoicePdf(inv) {
 
 async function drawSingapore(inv, { text, para, line, box, fill, image, bold, fontFor, shifted }) {
   const T = resolveTemplate(inv.country);
+  // The Template Studio passes inv.spots = [] to learn where each editable
+  // item landed (page points, top-down), so it can be clicked and dragged.
+  const spot = (path, x, top, w, h, kind = 'text') => {
+    if (inv.spots) inv.spots.push({ path, x, top, w: Math.max(w, 6), h: Math.max(h, 4), kind });
+  };
   const values = fieldValues(inv.country);
   const f = (s) => fillFields(s, values);
   const TABLE = { left: 64.1, right: 522.1, top: 208.5, headBottom: 225.2, bottom: 480.7 };
@@ -144,6 +149,7 @@ async function drawSingapore(inv, { text, para, line, box, fill, image, bold, fo
   if (L.show !== false) {
     const size = num(L.size, 59);
     await image(LOGO_JPG_BASE64, num(L.x, 58.5), num(L.top, 72.6), size, size);
+    spot(['logo'], num(L.x, 58.5), num(L.top, 72.6), size, size, 'logo');
   }
 
   /* ---- Letterhead: a stack of lines -------------------------------- */
@@ -153,7 +159,9 @@ async function drawSingapore(inv, { text, para, line, box, fill, image, bold, fo
   let top = num(T.header.top, 70.2);
   let lastTop = top;
   let first = true;
-  for (const ln of T.header.lines || []) {
+  const lines = T.header.lines || [];
+  for (let li = 0; li < lines.length; li++) {
+    const ln = lines[li];
     const value = f(ln.text);
     if (!value) continue;
     const size = num(ln.size, 6.8);
@@ -164,12 +172,15 @@ async function drawSingapore(inv, { text, para, line, box, fill, image, bold, fo
     const label = f(ln.label);
     const color = ln.link ? LINK : hex(ln.color);
     let x = X;
+    const lineTop = top;
     if (label) x += text(label, X, top, { size, font: fontFor(ln.labelBold !== false, ln.italic) });
     if (ln.wrap) {
       top = para(value, x, top, RIGHT - x, { size, font: fontFor(ln.bold, ln.italic), leading: lh, color });
+      spot(['header', 'lines', li], X, lineTop, RIGHT - X, top - lineTop, 'header');
     } else {
       const w = text(value, x, top, { size, font: fontFor(ln.bold, ln.italic), color, maxWidth: RIGHT - x });
       if (ln.link) line(x, top + size * 1.01, x + w, top + size * 1.01, 0.43);
+      spot(['header', 'lines', li], X, lineTop, x - X + w, lh, 'header');
       top += lh;
     }
   }
@@ -181,7 +192,8 @@ async function drawSingapore(inv, { text, para, line, box, fill, image, bold, fo
   if (stamp) {
     const size = num(S.size, 9);
     const stampTop = S.top === null || S.top === '' || S.top === undefined ? lastTop - 1 : num(S.top, lastTop - 1);
-    text(stamp, num(S.right, RIGHT), stampTop, { size, font: bold, color: hex(S.color, rgb(0.9, 0.07, 0.07)), align: 'right' });
+    const sw = text(stamp, num(S.right, RIGHT), stampTop, { size, font: bold, color: hex(S.color, rgb(0.9, 0.07, 0.07)), align: 'right' });
+    spot(['stamp'], num(S.right, RIGHT) - sw, stampTop, sw, size * 1.2, 'stamp');
   }
 
   /* ---- Title, then everything below moves down to make room --------- */
@@ -189,23 +201,27 @@ async function drawSingapore(inv, { text, para, line, box, fill, image, bold, fo
   const titleText = f(inv.docType === 'Quotation' ? TT.quotation
                     : inv.docType === 'Proforma Invoice' ? TT.proforma : TT.invoice) || inv.docType.toUpperCase();
   const titleTop = Math.max(138, bottom + num(TT.gap, 7));
-  text(titleText, num(TT.x, 65.8), titleTop, { size: num(TT.size, 14), font: bold, maxWidth: RIGHT - num(TT.x, 65.8) });
+  const titleW = text(titleText, num(TT.x, 65.8), titleTop, { size: num(TT.size, 14), font: bold, maxWidth: RIGHT - num(TT.x, 65.8) });
+  const titleKey = inv.docType === 'Quotation' ? 'quotation' : inv.docType === 'Proforma Invoice' ? 'proforma' : 'invoice';
+  spot(['title', titleKey], num(TT.x, 65.8), titleTop, titleW, num(TT.size, 14) * 1.2, 'title');
   ({ text, line, box, fill } = shifted(16 + (titleTop - 138)));
   const shift = 16 + (titleTop - 138);
   const LB = T.labels || {};
 
   /* ---- Bill to ----------------------------------------------------- */
-  text(f(LB.billTo), 65.8, 151.1, { size: 6.8, font: bold });
+  spot(['labels', 'billTo'], 65.8, 151.1 + shift, text(f(LB.billTo), 65.8, 151.1, { size: 6.8, font: bold }), 8.2);
   text(inv.customer, 124.8, 151.1, { size: 6.8, font: bold, maxWidth: 230 });
   const billLines = [...String(inv.address || '').split(/\r?\n/), inv.email]
     .map((s) => String(s || '').trim()).filter(Boolean).slice(0, 5);
   billLines.forEach((s, i) => text(s, 124.8, 161.3 + i * 8.1, { size: 6.8, maxWidth: 230 }));
 
   /* ---- Invoice no / PO / date / terms ------------------------------ */
-  const meta = [[LB.invoiceNo, inv.invoiceId], [LB.po, inv.po], [LB.date, formatDate(inv.date)], [LB.terms, inv.terms]];
-  meta.forEach(([label, value], i) => {
+  const meta = [[LB.invoiceNo, inv.invoiceId, 'invoiceNo'], [LB.po, inv.po, 'po'], [LB.date, formatDate(inv.date), 'date'],
+                [LB.terms, inv.terms, 'terms']];
+  meta.forEach(([label, value, k], i) => {
     const t = 151.1 + i * 10.23;
-    text(f(label), 431.1, t, { size: 6.8, align: 'right' });
+    const lw = text(f(label), 431.1, t, { size: 6.8, align: 'right' });
+    spot(['labels', k], 431.1 - lw, t + shift, lw, 8.2);
     text(value, 476.6, t, { size: 6.8, align: 'center', maxWidth: 88 });
     line(431.1, t + 8.9, 522.1, t + 8.9, 0.43);
   });
@@ -257,7 +273,7 @@ async function drawSingapore(inv, { text, para, line, box, fill, image, bold, fo
     text(label, 429.0, t, { font: bold, align: 'right' });
     amountCell(n, 434.9, 516.3, t);
   });
-  text(f(LB.currencyNote), 65.8, 502.8, { font: bold });
+  spot(['labels', 'currencyNote'], 65.8, 502.8 + shift, text(f(LB.currencyNote), 65.8, 502.8, { font: bold }), 7.6);
 
   /* ---- Footer: bank details, notes, signatures, footnote ------------ */
   // Flows down the page, so a longer bank block or notes push the rest down.
@@ -267,11 +283,13 @@ async function drawSingapore(inv, { text, para, line, box, fill, image, bold, fo
     const title = f(F.bankTitle);
     if (title) {
       const bw = text(title, 65.8, y, { size: 6.8, font: bold });
+      spot(['footer', 'bankTitle'], 65.8, y + shift, bw, 8.2);
       line(65.8, y + 6.8, 65.8 + bw, y + 6.8, 0.43);
       y += 10.3;
     }
     const bankSize = num(F.bankSize, 6.3);
     const step = bankSize * 1.56;                            // 9.83 at the original 6.3pt
+    const bankTop = y;
     for (const raw of f(F.bank).split(/\r?\n/)) {
       const l = raw.trim();
       if (!l) continue;                                      // groups are one continuous list here
@@ -284,6 +302,7 @@ async function drawSingapore(inv, { text, para, line, box, fill, image, bold, fo
       }
       y += step;
     }
+    if (y > bankTop) spot(['footer', 'bank'], 65.8, bankTop + shift, RIGHT - 65.8, y - bankTop, 'block');
   }
 
   const notes = f(F.notes);
@@ -291,7 +310,9 @@ async function drawSingapore(inv, { text, para, line, box, fill, image, bold, fo
     y += 6;
     const size = num(F.notesSize, 5.5);
     // para() works in page coordinates; add the shift back in and take it out again
+    const notesTop = y;
     y = para(notes, 65.8, y + shift, RIGHT - 65.8, { size, leading: size * 1.3 }) - shift;
+    spot(['footer', 'notes'], 65.8, notesTop + shift, RIGHT - 65.8, y - notesTop, 'block');
   }
 
   const sigs = (F.signatures || []).filter((s) => s && (s.label || '').trim());
@@ -304,12 +325,16 @@ async function drawSingapore(inv, { text, para, line, box, fill, image, bold, fo
       const x = 65.8 + i * slot;
       line(x, y, x + width, y, 0.6);
       text(f(s.label), x, y + 3, { size: 6.3 });
+      spot(['footer', 'signatures', (F.signatures || []).indexOf(s)], x, y - 12 + shift, width, 22, 'signature');
     });
     y += 14;
   }
 
   const foot = f(F.footnote);
-  if (foot) text(foot, 65.8, y + 10.1, { size: num(F.footnoteSize, 4.6), maxWidth: RIGHT - 65.8 });
+  if (foot) {
+    const fw = text(foot, 65.8, y + 10.1, { size: num(F.footnoteSize, 4.6), maxWidth: RIGHT - 65.8 });
+    spot(['footer', 'footnote'], 65.8, y + 10.1 + shift, fw, num(F.footnoteSize, 4.6) * 1.3);
+  }
 }
 
 
