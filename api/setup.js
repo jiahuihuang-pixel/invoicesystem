@@ -105,7 +105,7 @@ export default async function handler(req, res) {
 
     if (!driveConfigured()) {
       out.push('⚠️ Google Drive: not set up, so the Tracker gets the app\'s own PDF links. ' +
-               `See the README, then open ${url}/api/google-auth?key=<your secret>`);
+               'Add DRIVE_FOLDER_ID in Vercel (a Shared Drive the service account can edit) - see the README.');
     } else {
       try { ok(`Google Drive: saving into ${await driveCheck()}`); }
       catch (e) { bad(e.message); }
