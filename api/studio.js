@@ -70,7 +70,7 @@ async function load() {
       address: '1 Example Road #01-01\nSample City 123456',
       email: 'accounts@example.com',
       po: 'PO-12345',
-      terms: CONFIG.TERMS[0],
+      terms: CONFIG.DEFAULT_TERMS,
       items,
       ...calc
     };
