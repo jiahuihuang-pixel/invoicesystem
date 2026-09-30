@@ -17,7 +17,10 @@ import { LOGO_JPG_BASE64, LOGO_GREY_JPG_BASE64 } from './logo.js';
 import { resolveTemplate, fieldValues, fill as fillFields } from './template.js';
 
 const W = 595.92, H = 842.88;
-const Y = (top) => H - top;
+// Pages are drawn as if they were very tall, then moved (and, when there is
+// too much to fit, shrunk evenly) onto the A4 page by finishPage().
+const BIG = 3000;
+const Y = (top) => BIG - top;
 const BLACK = rgb(0, 0, 0);
 const WHITE = rgb(1, 1, 1);
 const LINK = rgb(0x11 / 255, 0x55 / 255, 0xcc / 255);
@@ -122,8 +125,21 @@ export async function renderInvoicePdf(inv) {
   };
   const newPage = () => { page = pdf.addPage([W, H]); };
 
-  const draw = { text, para, line, box, fill: fillRect, image, reg, bold, italic, fontFor, shifted, newPage };
-  if (inv.country.layout === 'simple') await drawSimple(inv, draw);
+  /**
+   * Puts what was drawn onto the A4 page. `contentBottom` is how far down
+   * the page's content reaches: up to A4 it is placed as drawn, beyond that
+   * everything is scaled down evenly (and centred) until it fits.
+   */
+  const finishPage = (contentBottom) => {
+    const s = contentBottom > H ? H / contentBottom : 1;
+    const tx = (W - W * s) / 2;
+    if (s !== 1) page.scaleContent(s, s);
+    page.translateContent(tx, H - s * BIG);
+    return { s, tx };
+  };
+
+  const draw = { text, para, line, box, fill: fillRect, image, reg, bold, italic, fontFor, shifted, newPage, finishPage };
+  if (inv.country.layout === 'simple') { await drawSimple(inv, draw); finishPage(H); }
   else await drawSingapore(inv, draw);
 
   return pdf.save();
@@ -153,7 +169,12 @@ async function drawSingapore(inv, tools) {
   let start = 0;
   for (let p = 0; p < pages.length; p++) {
     if (p) tools.newPage();
-    await drawPage(inv, tools, { lines: pages[p], start, page: p, pages: pages.length });
+    const needed = await drawPage(inv, tools, { lines: pages[p], start, page: p, pages: pages.length });
+    const fit = tools.finishPage(needed);
+    // The Template Studio's click areas must shrink with the page
+    if (p === 0 && inv.spots && fit.s !== 1) {
+      inv.spots.forEach((sp) => { sp.x = fit.tx + sp.x * fit.s; sp.top *= fit.s; sp.w *= fit.s; sp.h *= fit.s; });
+    }
     start += pages[p].length;
   }
 }
@@ -260,12 +281,15 @@ async function drawPage(inv, { text, para, line, box, fill, image, bold, fontFor
   /* ---- Items table, stretched to fill the page ----------------------- */
   // Everything below the table (totals, bank details, notes, signatures,
   // footnote) is measured first; the table then runs down to meet it, so
-  // the footer sits near the bottom of the A4 page. Never shorter than the
-  // original 13-row table.
+  // the footer sits near the bottom of the A4 page. The table always has
+  // room for its rows at the sheet's spacing (at least 13 of them); if that
+  // plus the footer is taller than A4, the whole page is shrunk to fit.
   const F = T.footer || {};
   const PAGE_BOTTOM = H - 30 - shift;                       // 30pt margin, in the moved-down coordinates
   const footerHeight = drawFooter(0, true);
-  TABLE.bottom = Math.max(480.7, PAGE_BOTTOM - 58.8 - footerHeight);
+  const natural = TABLE.headBottom + Math.max(13, pg.lines.length) * ROW_H;
+  TABLE.bottom = Math.max(natural, PAGE_BOTTOM - 58.8 - footerHeight);
+  const needed = TABLE.bottom + 58.8 + footerHeight + 30 + shift;   // how tall this page is, before shrinking
   const TOTALS = [0, 10.3, 20.5, 30.8].map((d) => TABLE.bottom + d);   // SUB-TOTAL / GST / GRAND TOTAL rows
 
   fill(TABLE.left, TABLE.top, TABLE.right, TABLE.headBottom, HEAD_FILL);
@@ -287,8 +311,7 @@ async function drawPage(inv, { text, para, line, box, fill, image, bold, fontFor
     text(n < 0 ? `(${money(n)})` : money(n), n < 0 ? rightX + 2.1 : rightX, t, { ...opts, align: 'right' });
   };
 
-  // Rows keep the sheet's spacing, and only close up if a page is very full
-  const rowH = Math.min(ROW_H, (TABLE.bottom - TABLE.headBottom) / Math.max(pg.lines.length, 1));
+  const rowH = ROW_H;
   pg.lines.forEach((l, i) => {
     const t = TABLE.headBottom + rowH * 0.56 + i * rowH;
     text(String(pg.start + i + 1), mid(0), t, { align: 'center' });
@@ -300,11 +323,11 @@ async function drawPage(inv, { text, para, line, box, fill, image, bold, fontFor
   });
 
   if (pg.pages > 1) {
-    text(`Page ${pg.page + 1} of ${pg.pages}`, RIGHT, H - 24 - shift, { size: 6.3, align: 'right' });
+    text(`Page ${pg.page + 1} of ${pg.pages}`, RIGHT, Math.max(H, needed) - 24 - shift, { size: 6.3, align: 'right' });
   }
   if (!lastPage) {
     text('Continued on next page', 516.3, TABLE.bottom + 4, { font: bold, align: 'right' });
-    return;
+    return needed;
   }
 
   /* ---- Totals ------------------------------------------------------ */
@@ -327,6 +350,7 @@ async function drawPage(inv, { text, para, line, box, fill, image, bold, fontFor
   spot(['labels', 'currencyNote'], 65.8, TABLE.bottom + 22.1 + shift,
        text(f(LB.currencyNote), 65.8, TABLE.bottom + 22.1, { font: bold }), 7.6);
   drawFooter(TABLE.bottom + 58.8, false);
+  return needed;
 
   /* ---- Footer: bank details, notes, signatures, footnote ------------ */
   // Flows down the page from `y0`, so a longer bank block or notes push
