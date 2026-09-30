@@ -17,6 +17,7 @@
   const W = window.Telegram && window.Telegram.WebApp;
   const tg = W && W.platform && W.platform !== 'unknown' ? W : null;
   const DEMO = /[?&]demo=1\b/.test(location.search);
+  const VERSION = '30 Sep 2026';          // shown on the first step, to check the newest form is loaded
   const initData = tg ? tg.initData : '';
 
   const STEPS = ['country', 'customer', 'items', 'details', 'review'];
@@ -241,7 +242,8 @@
       c.ready ? h('span', { class: 'chev', 'aria-hidden': 'true' }, '›') : null)));
     return [h('h1', {}, 'Which country?'),
             h('p', { class: 'lead' }, 'This picks the invoice template, currency and prices.'),
-            h('div', { class: 'card' }, list)];
+            h('div', { class: 'card' }, list),
+            h('p', { class: 'hint', style: 'text-align:center' }, 'Form version ' + VERSION)];
   }
 
   function pickCountry(c) {
