@@ -42,8 +42,8 @@ export default async function handler(req, res) {
       body: new URLSearchParams({
         grant_type: 'authorization_code',
         code: String(req.query.code),
-        client_id: env('GOOGLE_OAUTH_CLIENT_ID'),
-        client_secret: env('GOOGLE_OAUTH_CLIENT_SECRET'),
+        client_id: env('GOOGLE_OAUTH_CLIENT_ID').trim(),
+        client_secret: env('GOOGLE_OAUTH_CLIENT_SECRET').trim(),
         redirect_uri: redirectUri
       })
     });
@@ -67,9 +67,25 @@ export default async function handler(req, res) {
   if (!crypto.timingSafeEqual(hash(req.query.key || ''), hash(env('TELEGRAM_WEBHOOK_SECRET')))) {
     return page(res, 403, 'Not allowed', '<p>Add <code>?key=</code> and your TELEGRAM_WEBHOOK_SECRET to the address.</p>');
   }
+  // ?check=1 shows what would be sent to Google, to compare with the
+  // Google Cloud settings when Google says "Access blocked".
+  if (req.query.check) {
+    const id = process.env.GOOGLE_OAUTH_CLIENT_ID || '';
+    return page(res, 200, 'Google sign-in check',
+      '<p>Compare these with Google Cloud → Google Auth Platform → Clients → your client.</p>' +
+      `<p><b>Client ID the app uses:</b><br><code>${escHtml(id || '(not set in Vercel)')}</code>` +
+      (id !== id.trim() ? '<br>⚠️ It has spaces at the start or end: remove them in Vercel.' : '') +
+      (id && !/\.apps\.googleusercontent\.com$/.test(id.trim()) ? '<br>⚠️ A Client ID ends in .apps.googleusercontent.com. This looks like something else.' : '') +
+      '</p>' +
+      `<p><b>Client secret set:</b> ${process.env.GOOGLE_OAUTH_CLIENT_SECRET ? 'yes' : 'no ⚠️'}</p>` +
+      `<p><b>Redirect URI the app sends</b> (must be listed exactly under Authorised redirect URIs):<br><code>${escHtml(redirectUri)}</code></p>` +
+      `<p><b>Permission asked for:</b> <code>${escHtml(DRIVE_SCOPE)}</code></p>` +
+      `<p><a href="?key=${encodeURIComponent(String(req.query.key))}">Continue to Google sign-in →</a></p>`);
+  }
+
   const url = new URL('https://accounts.google.com/o/oauth2/v2/auth');
   url.search = new URLSearchParams({
-    client_id: env('GOOGLE_OAUTH_CLIENT_ID'),
+    client_id: env('GOOGLE_OAUTH_CLIENT_ID').trim(),
     redirect_uri: redirectUri,
     response_type: 'code',
     scope: DRIVE_SCOPE,
