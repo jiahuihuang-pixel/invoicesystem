@@ -464,8 +464,8 @@
   }
 
   function detailsStep() {
-    const termsList = data.terms.includes(state.terms) || !state.terms ? data.terms : [state.terms, ...data.terms];
-    if (!state.terms) state.terms = termsList[0];
+    // Terms are not chosen here: the customer's own, or the default
+    const terms = (state.customer && state.customer.terms) || data.defaultTerms || 'Cash Before Delivery';
 
     const auto = autoDiscount();
     const discountCard = h('div', { class: 'card' }, h('h2', {}, 'Discount'),
@@ -493,7 +493,9 @@
       h('p', { class: 'lead' }, 'Nearly done.'),
       targetCard,
       h('div', { class: 'card' }, h('h2', {}, 'Document'), chips(data.docTypes, state.docType, (v) => { state.docType = v; })),
-      h('div', { class: 'card' }, h('h2', {}, 'Payment terms'), chips(termsList, state.terms, (v) => { state.terms = v; })),
+      h('div', { class: 'card' }, h('h2', {}, 'Payment terms'),
+        h('div', { style: 'font-weight:600' }, terms),
+        h('p', { class: 'hint', style: 'margin:4px 0 0' }, 'Need different terms for this customer? Message the admin.')),
       h('div', { class: 'card' },
         h('label', { for: 'f-po' }, 'PO number ', h('span', { class: 'opt' }, '(optional)')),
         h('input', { id: 'f-po', type: 'text', value: state.po, placeholder: 'e.g. PO-2291', oninput: (e) => { state.po = e.target.value; } })),
@@ -513,7 +515,9 @@
       h('div', { class: 'card' }, h('h2', {}, `${state.country.flag} ${state.country.name} ${state.docType.toLowerCase()} for`),
         h('div', { style: 'font-weight:600' }, state.customer ? state.customer.name : state.name.trim()),
         h('div', { class: 'hint', style: 'white-space:pre-line' }, [state.address, state.email].filter(Boolean).join('\n')),
-        h('div', { class: 'hint', style: 'margin-top:6px' }, [state.terms, state.po && 'PO ' + state.po].filter(Boolean).join(' · '))),
+        h('div', { class: 'hint', style: 'margin-top:6px' },
+          [(state.customer && state.customer.terms) || data.defaultTerms || 'Cash Before Delivery', state.po && 'PO ' + state.po]
+            .filter(Boolean).join(' · '))),
       h('div', { class: 'card' }, h('h2', {}, 'Items'),
         ...state.items.map((it) => h('div', { class: 'row' },
           h('span', {}, `${it.qty} × ${it.name}`), h('span', { class: 'num' }, it.price == null ? '—' : money(it.price * it.qty)))),
@@ -541,7 +545,7 @@
       customer: { name: state.customer ? state.customer.name : state.name.trim(), address: state.address, email: state.email.trim() },
       items: state.items.map(({ name, code, qty }) => ({ name, code, qty })),
       country: state.country.code,
-      docType: state.docType, terms: state.terms, po: state.po.trim(),
+      docType: state.docType, po: state.po.trim(),
       discountMode: state.discountMode, discount: state.discountMode === 'manual' ? String(state.discount) : '',
       pricing: state.originalPrices ? 'original' : 'customer',
       targetId: state.targetId
@@ -594,7 +598,7 @@
         { name: 'Linko Smart Technology Limited', address: 'Unit 18-19, 11/F, Nan Fund Commercial Centre,\n19 Lam Lok Street, Kowloon Bay, Hong Kong', email: '', terms: 'Cash Before Delivery', margin: 0, country: 'HK' }
       ],
       docTypes: ['Invoice', 'Quotation', 'Proforma Invoice'],
-      terms: ['Cash Before Delivery', 'Cash On Delivery', '30 Days'],
+      defaultTerms: 'Cash Before Delivery',
       maxItems: 12,
       targets: { fixed: false, options: [{ id: '-1001', title: 'Harmony Audio x TC' }, { id: '1', title: 'Me (private chat)' }] }
     };
