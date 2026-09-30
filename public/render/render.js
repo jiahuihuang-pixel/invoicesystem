@@ -61,7 +61,7 @@ export async function renderInvoicePdf(inv) {
   const pdf = await PDFDocument.create();
   pdf.setTitle(`${inv.docType} ${inv.invoiceId}`);
   pdf.setAuthor((inv.country.company && inv.country.company.name) || '');
-  const page = pdf.addPage([W, H]);
+  let page = pdf.addPage([W, H]);                         // the tools below draw on whichever page is current
   const reg = await pdf.embedFont(StandardFonts.Helvetica);
   const bold = await pdf.embedFont(StandardFonts.HelveticaBold);
   const italic = await pdf.embedFont(StandardFonts.HelveticaOblique);
@@ -100,24 +100,29 @@ export async function renderInvoicePdf(inv) {
     fill: (x1, t1, x2, t2, c) => fillRect(x1, t1 + d, x2, t2 + d, c)
   });
 
-  /** Word-wraps to `width`; returns the top of the line after the last one. */
-  const para = (s, x, top, width, { size = 6.3, font = reg, leading = size * 1.2, ...o } = {}) => {
+  /**
+   * Word-wraps to `width`; returns the top of the line after the last one.
+   * With `dry`, only measures (for fitting the table to the page).
+   */
+  const para = (s, x, top, width, { size = 6.3, font = reg, leading = size * 1.2, dry = false, ...o } = {}) => {
+    const put = (t, at) => { if (!dry) text(t, x, at, { size, font, ...o }); };
     for (const paragraph of String(s == null ? '' : s).split(/\r?\n/)) {
       const words = clean(paragraph).split(' ').filter(Boolean);
       let lineText = '';
       for (const w of words) {
         const next = lineText ? lineText + ' ' + w : w;
         if (lineText && font.widthOfTextAtSize(next, size) > width) {
-          text(lineText, x, top, { size, font, ...o }); top += leading; lineText = w;
+          put(lineText, top); top += leading; lineText = w;
         } else lineText = next;
       }
-      if (lineText) text(lineText, x, top, { size, font, ...o });
+      if (lineText) put(lineText, top);
       top += leading;                                     // blank lines keep their space
     }
     return top;
   };
+  const newPage = () => { page = pdf.addPage([W, H]); };
 
-  const draw = { text, para, line, box, fill: fillRect, image, reg, bold, italic, fontFor, shifted };
+  const draw = { text, para, line, box, fill: fillRect, image, reg, bold, italic, fontFor, shifted, newPage };
   if (inv.country.layout === 'simple') await drawSimple(inv, draw);
   else await drawSingapore(inv, draw);
 
@@ -129,19 +134,44 @@ export async function renderInvoicePdf(inv) {
  * THE TEMPLATED DESIGN (Singapore, and every country by default)
  * ===================================================================== */
 
-async function drawSingapore(inv, { text, para, line, box, fill, image, bold, fontFor, shifted }) {
+/**
+ * Up to ITEMS_PER_PAGE items per page. Every page repeats the letterhead,
+ * title, bill-to and invoice details; S/N numbering carries on; totals and
+ * the footer come only on the last page. The discount line always goes on
+ * the last page, after the items.
+ */
+export const ITEMS_PER_PAGE = 20;
+
+async function drawSingapore(inv, tools) {
+  const per = inv.itemsPerPage || ITEMS_PER_PAGE;
+  const items = inv.lines.filter((l) => !l.isDiscount);
+  const pages = [];
+  for (let i = 0; i < items.length; i += per) pages.push(items.slice(i, i + per));
+  if (!pages.length) pages.push([]);
+  pages[pages.length - 1].push(...inv.lines.filter((l) => l.isDiscount));
+
+  let start = 0;
+  for (let p = 0; p < pages.length; p++) {
+    if (p) tools.newPage();
+    await drawPage(inv, tools, { lines: pages[p], start, page: p, pages: pages.length });
+    start += pages[p].length;
+  }
+}
+
+async function drawPage(inv, { text, para, line, box, fill, image, bold, fontFor, shifted }, pg) {
   const T = resolveTemplate(inv.country);
+  const lastPage = pg.page === pg.pages - 1;
   // The Template Studio passes inv.spots = [] to learn where each editable
   // item landed (page points, top-down), so it can be clicked and dragged.
   const spot = (path, x, top, w, h, kind = 'text') => {
-    if (inv.spots) inv.spots.push({ path, x, top, w: Math.max(w, 6), h: Math.max(h, 4), kind });
+    if (inv.spots && pg.page === 0) inv.spots.push({ path, x, top, w: Math.max(w, 6), h: Math.max(h, 4), kind });
   };
   const values = fieldValues(inv.country);
   const f = (s) => fillFields(s, values);
+  // The table's bottom edge is worked out below, once the footer has been measured
   const TABLE = { left: 64.1, right: 522.1, top: 208.5, headBottom: 225.2, bottom: 480.7 };
   const COLS = [64.1, 123.5, 299.1, 358.1, 431.6, 522.1];   // S/N | DESCRIPTION | QTY | UNIT PRICE | AMOUNT
-  const ROW_H = 19.65, ROWS = 13;
-  const TOTALS = [480.7, 491.0, 501.2, 511.5];              // SUB-TOTAL / GST / GRAND TOTAL rows
+  const ROW_H = 19.65;                                      // the sheet's row height: 13 rows in the original table
   const RIGHT = TABLE.right;
 
   /* ---- Logo -------------------------------------------------------- */
@@ -206,6 +236,7 @@ async function drawSingapore(inv, { text, para, line, box, fill, image, bold, fo
   spot(['title', titleKey], num(TT.x, 65.8), titleTop, titleW, num(TT.size, 14) * 1.2, 'title');
   ({ text, line, box, fill } = shifted(16 + (titleTop - 138)));
   const shift = 16 + (titleTop - 138);
+  const textOnPage = text, lineOnPage = line, spotOnPage = spot;
   const LB = T.labels || {};
 
   /* ---- Bill to ----------------------------------------------------- */
@@ -226,7 +257,17 @@ async function drawSingapore(inv, { text, para, line, box, fill, image, bold, fo
     line(431.1, t + 8.9, 522.1, t + 8.9, 0.43);
   });
 
-  /* ---- Items table ------------------------------------------------- */
+  /* ---- Items table, stretched to fill the page ----------------------- */
+  // Everything below the table (totals, bank details, notes, signatures,
+  // footnote) is measured first; the table then runs down to meet it, so
+  // the footer sits near the bottom of the A4 page. Never shorter than the
+  // original 13-row table.
+  const F = T.footer || {};
+  const PAGE_BOTTOM = H - 30 - shift;                       // 30pt margin, in the moved-down coordinates
+  const footerHeight = drawFooter(0, true);
+  TABLE.bottom = Math.max(480.7, PAGE_BOTTOM - 58.8 - footerHeight);
+  const TOTALS = [0, 10.3, 20.5, 30.8].map((d) => TABLE.bottom + d);   // SUB-TOTAL / GST / GRAND TOTAL rows
+
   fill(TABLE.left, TABLE.top, TABLE.right, TABLE.headBottom, HEAD_FILL);
   box(TABLE.left, TABLE.top, TABLE.right, TABLE.bottom);
   line(TABLE.left, TABLE.headBottom, TABLE.right, TABLE.headBottom);
@@ -246,15 +287,25 @@ async function drawSingapore(inv, { text, para, line, box, fill, image, bold, fo
     text(n < 0 ? `(${money(n)})` : money(n), n < 0 ? rightX + 2.1 : rightX, t, { ...opts, align: 'right' });
   };
 
-  inv.lines.slice(0, ROWS).forEach((l, i) => {
-    const t = 236.2 + i * ROW_H;
-    text(String(i + 1), mid(0), t, { align: 'center' });
+  // Rows keep the sheet's spacing, and only close up if a page is very full
+  const rowH = Math.min(ROW_H, (TABLE.bottom - TABLE.headBottom) / Math.max(pg.lines.length, 1));
+  pg.lines.forEach((l, i) => {
+    const t = TABLE.headBottom + rowH * 0.56 + i * rowH;
+    text(String(pg.start + i + 1), mid(0), t, { align: 'center' });
     text(l.description, 124.8, t, { maxWidth: COLS[2] - 124.8 - 2 });
     if (l.qty != null) text(String(l.qty), mid(2), t, { align: 'center' });
     if (l.unit != null) amountCell(l.unit, 361.4, 425.7, t);
     if (l.amount != null) amountCell(l.amount, 434.9, 516.3, t);
     else if (!l.isDiscount) text('price?', 516.3, t, { align: 'right' });   // not on the Product list
   });
+
+  if (pg.pages > 1) {
+    text(`Page ${pg.page + 1} of ${pg.pages}`, RIGHT, H - 24 - shift, { size: 6.3, align: 'right' });
+  }
+  if (!lastPage) {
+    text('Continued on next page', 516.3, TABLE.bottom + 4, { font: bold, align: 'right' });
+    return;
+  }
 
   /* ---- Totals ------------------------------------------------------ */
   // With tax: SUB-TOTAL / 9% GST / GRAND TOTAL. Without: GRAND TOTAL only,
@@ -273,12 +324,20 @@ async function drawSingapore(inv, { text, para, line, box, fill, image, bold, fo
     text(label, 429.0, t, { font: bold, align: 'right' });
     amountCell(n, 434.9, 516.3, t);
   });
-  spot(['labels', 'currencyNote'], 65.8, 502.8 + shift, text(f(LB.currencyNote), 65.8, 502.8, { font: bold }), 7.6);
+  spot(['labels', 'currencyNote'], 65.8, TABLE.bottom + 22.1 + shift,
+       text(f(LB.currencyNote), 65.8, TABLE.bottom + 22.1, { font: bold }), 7.6);
+  drawFooter(TABLE.bottom + 58.8, false);
 
   /* ---- Footer: bank details, notes, signatures, footnote ------------ */
-  // Flows down the page, so a longer bank block or notes push the rest down.
-  const F = T.footer || {};
-  let y = 539.5;                                             // in the moved-down coordinates
+  // Flows down the page from `y0`, so a longer bank block or notes push
+  // the rest down. With `dry`, draws nothing and returns the height, which
+  // is how the table knows how far down it can stretch.
+  function drawFooter(y0, dry) {
+  const T0 = y0;
+  const text = dry ? (s, x, t, o = {}) => 0 : textOnPage;
+  const line = dry ? () => {} : lineOnPage;
+  const spot = dry ? () => {} : spotOnPage;
+  let y = y0;
   if (F.showBank !== false) {
     const title = f(F.bankTitle);
     if (title) {
@@ -311,7 +370,7 @@ async function drawSingapore(inv, { text, para, line, box, fill, image, bold, fo
     const size = num(F.notesSize, 5.5);
     // para() works in page coordinates; add the shift back in and take it out again
     const notesTop = y;
-    y = para(notes, 65.8, y + shift, RIGHT - 65.8, { size, leading: size * 1.3 }) - shift;
+    y = para(notes, 65.8, y + shift, RIGHT - 65.8, { size, leading: size * 1.3, dry }) - shift;
     spot(['footer', 'notes'], 65.8, notesTop + shift, RIGHT - 65.8, y - notesTop, 'block');
   }
 
@@ -334,6 +393,9 @@ async function drawSingapore(inv, { text, para, line, box, fill, image, bold, fo
   if (foot) {
     const fw = text(foot, 65.8, y + 10.1, { size: num(F.footnoteSize, 4.6), maxWidth: RIGHT - 65.8 });
     spot(['footer', 'footnote'], 65.8, y + 10.1 + shift, fw, num(F.footnoteSize, 4.6) * 1.3);
+    y += 10.1 + num(F.footnoteSize, 4.6) * 1.2;
+  }
+  return y - T0;
   }
 }
 
