@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Template Studio</title>
+  <link rel="icon" href="logo.png">
+  <link rel="stylesheet" href="studio.css">
+  <script src="https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
+  <script type="importmap">{ "imports": { "pdf-lib": "/render/pdf-lib-browser.js" } }</script>
+</head>
+<body>
+  <header class="bar">
+    <div class="brand">Template Studio</div>
+    <label class="pick">Country <select id="country"></select></label>
+    <label class="pick">Document <select id="doctype"></select></label>
+    <span class="status" id="status"></span>
+    <span class="spacer"></span>
+    <button class="btn ghost" id="reset" type="button" title="Throw away this country's saved template">Reset to default</button>
+    <button class="btn ghost" id="discard" type="button">Discard changes</button>
+    <button class="btn primary" id="save" type="button">Save</button>
+  </header>
+
+  <main class="split">
+    <section class="preview">
+      <iframe id="pdf" title="Invoice preview"></iframe>
+      <div class="error" id="render-error" hidden></div>
+    </section>
+    <aside class="panel" id="panel">
+      <div class="center"><div class="spinner"></div></div>
+    </aside>
+  </main>
+
+  <div class="gate" id="gate" hidden>
+    <form class="gate-card" id="gate-form">
+      <h1>Template Studio</h1>
+      <p>Enter your <b>TELEGRAM_WEBHOOK_SECRET</b> (from Vercel → Settings → Environment Variables).</p>
+      <input id="gate-key" type="password" autocomplete="off" placeholder="Secret key" required>
+      <p class="gate-error" id="gate-error" hidden></p>
+      <button class="btn primary" type="submit">Open</button>
+    </form>
+  </div>
+
+  <script type="module" src="studio.js"></script>
+</body>
+</html>
