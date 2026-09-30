@@ -33,6 +33,7 @@
     items: [],                       // { name, code, price, qty }
     docType: '', terms: '', po: '',
     discountMode: 'auto', discount: '',
+    originalPrices: false,           // true = ignore this customer's special prices this time
     targetId: ''
   };
 
@@ -61,7 +62,27 @@
   // "$1,234.00" in Singapore, "HKD 1,234.00" elsewhere
   const money = (n) => (!state.country || state.country.code === 'SG' ? '$' : state.country.currency + ' ') +
     (Math.round((Math.abs(n) + Number.EPSILON) * 100) / 100).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
-  const priceOf = (p) => (p.prices && state.country ? p.prices[state.country.code] : null);
+  const listPriceOf = (p) => (p.prices && state.country ? p.prices[state.country.code] : null);
+  /** This customer's special price for a product (Customer Prices tab), or null. */
+  const specialOf = (p) => {
+    if (!state.customer || state.originalPrices || !state.country) return null;
+    const s = (state.customer.special || []).find((x) => x.name === p.name && (!x.country || x.country === state.country.code));
+    return s ? s.price : null;
+  };
+  const priceOf = (p) => { const sp = specialOf(p); return sp != null ? sp : listPriceOf(p); };
+  /** Does this customer have any special prices in this country? */
+  const hasSpecials = () => !!state.customer && !!state.country &&
+    (state.customer.special || []).some((x) => !x.country || x.country === state.country.code);
+
+  /** Re-price the order after the customer or the original-prices switch changes. */
+  function reprice() {
+    state.items.forEach((it) => {
+      const p = data.products.find((x) => x.name === it.name);
+      if (!p) return;
+      it.special = specialOf(p) != null;
+      it.price = priceOf(p);
+    });
+  }
   const norm = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
   const round2 = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
   const haptic = (kind) => { try { tg.HapticFeedback.impactOccurred(kind || 'light'); } catch (e) {} };
@@ -75,12 +96,18 @@
   function margin() {
     return state.customer ? state.customer.margin || 0 : 0;
   }
+  /** The customer margin only applies to items at list price, never at original prices. */
+  function autoDiscount() {
+    if (state.originalPrices) return 0;
+    const g = state.items.filter((it) => !it.special).reduce((s, it) => s + (it.price || 0) * it.qty, 0);
+    return round2(g * margin());
+  }
   function discountValue() {
     if (state.discountMode === 'manual') {
       const n = parseFloat(String(state.discount).replace(/[^0-9.]/g, ''));
       return isNaN(n) ? 0 : n;
     }
-    return round2(gross() * margin());
+    return autoDiscount();
   }
   function total() { return gross() - discountValue(); }
 
@@ -320,6 +347,8 @@
     state.email = c.email;
     state.editDetails = false;
     if (c.terms) state.terms = c.terms;
+    state.originalPrices = false;
+    reprice();
     render();
   }
 
@@ -327,6 +356,8 @@
     state.customer = null;
     state.name = ''; state.address = ''; state.email = ''; state.terms = '';
     state.editDetails = false;
+    state.originalPrices = false;
+    reprice();
   }
 
 
@@ -344,9 +375,16 @@
 
     return [
       h('h1', {}, 'What are they buying?'),
-      h('p', { class: 'lead' }, `${state.country.flag} ${state.country.currency} list prices` +
+      h('p', { class: 'lead' }, `${state.country.flag} ${state.country.currency} prices` +
         (state.country.taxRate > 1 ? ', GST included.' : '.') +
-        (margin() ? ` ${round2(margin() * 100)}% customer discount is applied at the end.` : '')),
+        (hasSpecials() && !state.originalPrices ? ` ${state.customer.name}'s special prices are marked.` : '') +
+        (margin() && !state.originalPrices ? ` ${round2(margin() * 100)}% customer discount on the rest is applied at the end.` : '')),
+      hasSpecials() ? h('div', { class: 'card' },
+        h('label', { class: 'switch' },
+          h('input', { type: 'checkbox', checked: state.originalPrices,
+            onchange: (e) => { state.originalPrices = e.target.checked; reprice(); haptic(); render(); } }),
+          h('span', {}, h('b', {}, 'Use original prices'),
+            h('span', { class: 'hint', style: 'display:block' }, 'Charge the normal list price this time, not this customer\'s special prices.')))) : null,
       h('div', { class: 'card' }, h('h2', {}, 'Order'), cart),
       h('div', { class: 'card' }, h('div', { class: 'search' }, search), results)
     ];
@@ -374,7 +412,10 @@
         h('div', { class: 'grow' },
           h('div', { class: 'title' }, p.name),
           h('div', { class: 'sub' }, p.code || ' ')),
-        h('div', { class: 'price' }, priceOf(p) == null ? 'no price' : money(priceOf(p))),
+        specialOf(p) != null
+          ? h('div', { class: 'price' }, h('span', { class: 'special' }, money(specialOf(p))),
+              listPriceOf(p) != null ? h('s', { class: 'was' }, money(listPriceOf(p))) : null)
+          : h('div', { class: 'price' }, priceOf(p) == null ? 'no price' : money(priceOf(p))),
         inCart ? h('span', { class: 'in-cart' }, `×${inCart.qty}`) : h('button', { class: 'add', type: 'button', 'aria-label': 'Add ' + p.name }, '+'));
     }));
     if (!found.length) list.append(h('li', { class: 'sub' }, 'Nothing matches. Check the Product list tab.'));
@@ -389,7 +430,7 @@
     if (it) it.qty++;
     else {
       if (state.items.length >= data.maxItems) return showError(`Up to ${data.maxItems} different items fit on one invoice.`);
-      state.items.push({ name: p.name, code: p.code, price: priceOf(p), qty: 1 });
+      state.items.push({ name: p.name, code: p.code, price: priceOf(p), special: specialOf(p) != null, qty: 1 });
     }
     updateNext();
   }
@@ -403,7 +444,8 @@
     cart.replaceChildren(...state.items.map((it) => h('div', { class: 'cart-line' },
       h('div', { class: 'grow' },
         h('div', { class: 'title' }, it.name),
-        h('div', { class: 'sub muted' }, it.price == null ? 'No price on the list' : `${money(it.price)} each · ${money(it.price * it.qty)}`)),
+        h('div', { class: 'sub muted' }, it.price == null ? 'No price on the list'
+          : `${money(it.price)} each${it.special ? ' (special)' : ''} · ${money(it.price * it.qty)}`)),
       h('div', { class: 'stepper' },
         h('button', { type: 'button', 'aria-label': 'One fewer', onclick: () => {
           haptic(); it.qty--; if (it.qty < 1) state.items = state.items.filter((x) => x !== it); refresh(); } }, '−'),
@@ -425,11 +467,12 @@
     const termsList = data.terms.includes(state.terms) || !state.terms ? data.terms : [state.terms, ...data.terms];
     if (!state.terms) state.terms = termsList[0];
 
-    const auto = round2(gross() * margin());
+    const auto = autoDiscount();
     const discountCard = h('div', { class: 'card' }, h('h2', {}, 'Discount'),
       state.discountMode === 'auto'
         ? [h('div', { class: 'row' },
-             h('span', {}, margin() ? `${round2(margin() * 100)}% customer margin` : 'No discount'),
+             h('span', {}, auto ? `${round2(margin() * 100)}% customer margin` + (state.items.some((it) => it.special) ? ' (items at list price)' : '')
+                             : 'No discount'),
              h('span', { class: 'num' }, auto ? '−' + money(auto) : '')),
            h('button', { class: 'linkbtn', type: 'button', onclick: () => { state.discountMode = 'manual'; state.discount = auto ? String(auto) : ''; render(); } },
              'Enter a different amount')]
@@ -476,6 +519,8 @@
           h('span', {}, `${it.qty} × ${it.name}`), h('span', { class: 'num' }, it.price == null ? '—' : money(it.price * it.qty)))),
         d ? h('div', { class: 'row muted' }, h('span', {}, 'Discount'), h('span', { class: 'num' }, '−' + money(d))) : null,
         h('div', { class: 'row total' }, h('span', {}, 'Grand total'), h('span', { class: 'num' }, money(total()))),
+        state.originalPrices ? h('p', { class: 'hint', style: 'margin:4px 0 0' }, 'Original prices: this customer\'s special prices are not used.')
+          : state.items.some((it) => it.special) ? h('p', { class: 'hint', style: 'margin:4px 0 0' }, 'Includes this customer\'s special prices.') : null,
         state.country.taxRate > 1
           ? h('p', { class: 'hint', style: 'margin:4px 0 0' },
               `Includes ${round2((state.country.taxRate - 1) * 100)}% GST of ${money(total() - total() / state.country.taxRate)}`)
@@ -498,6 +543,7 @@
       country: state.country.code,
       docType: state.docType, terms: state.terms, po: state.po.trim(),
       discountMode: state.discountMode, discount: state.discountMode === 'manual' ? String(state.discount) : '',
+      pricing: state.originalPrices ? 'original' : 'customer',
       targetId: state.targetId
     };
     try {
@@ -543,7 +589,8 @@
       ],
       customers: [
         { name: 'Tom', address: 'east coast road 12345\nSingapore 111111', email: 'tom@gmail.com', terms: 'Cash Before Delivery', margin: 0, country: '' },
-        { name: 'Harmony Audio Pte Ltd', address: '10 Anson Road #12-01\nSingapore 079903', email: 'buy@harmony.sg', terms: '30 Days', margin: 0.15, country: 'SG' },
+        { name: 'Harmony Audio Pte Ltd', address: '10 Anson Road #12-01\nSingapore 079903', email: 'buy@harmony.sg', terms: '30 Days', margin: 0.15, country: 'SG',
+          special: [{ name: 'Sonos Ace White', price: 420, country: 'SG' }, { name: 'Sonos Arc Ultra Smart Soundbar White', price: 1299, country: '' }] },
         { name: 'Linko Smart Technology Limited', address: 'Unit 18-19, 11/F, Nan Fund Commercial Centre,\n19 Lam Lok Street, Kowloon Bay, Hong Kong', email: '', terms: 'Cash Before Delivery', margin: 0, country: 'HK' }
       ],
       docTypes: ['Invoice', 'Quotation', 'Proforma Invoice'],
