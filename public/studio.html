@@ -22,8 +22,16 @@
   </header>
 
   <main class="split">
-    <section class="preview">
-      <iframe id="pdf" title="Invoice preview"></iframe>
+    <section class="preview" id="stage">
+      <div class="tools">
+        <span class="tip">Click anything to edit it · drag the logo, letterhead, stamp or title to move · arrow keys nudge</span>
+        <a class="btn ghost small" id="open-pdf" target="_blank" rel="noopener">Open as PDF</a>
+      </div>
+      <div class="page" id="page">
+        <canvas id="canvas"></canvas>
+        <div class="spots" id="spots"></div>
+        <div class="pop" id="pop" hidden></div>
+      </div>
       <div class="error" id="render-error" hidden></div>
     </section>
     <aside class="panel" id="panel">

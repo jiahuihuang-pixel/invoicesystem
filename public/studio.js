@@ -20,6 +20,10 @@ let tpl = null;               // the template being edited (full, resolved)
 let savedJson = '';           // what is saved, to know about unsaved changes
 let lastFocus = null;         // where a clicked {Field} chip goes
 let pdfUrl = '';
+let spots = [];               // where each editable item is, from the last render
+let selected = null;          // path (array) of the clicked item
+let pdfjs = null;             // Mozilla's PDF viewer library, loaded on first use
+const PAGE_W = 595.92, PAGE_H = 842.88;
 
 
 /* Small helpers ----------------------------------------------------------- */
@@ -48,7 +52,9 @@ function setPath(path, value) {
   o[path[path.length - 1]] = value;
 }
 
-function changed() {
+function changed(fromPop = false) {
+  if (!fromPop) refreshPop();
+  else schedulePanel();
   const dirty = JSON.stringify(tpl) !== savedJson;
   const st = $('#status');
   st.textContent = dirty ? '● Unsaved changes' : 'Saved';
@@ -62,14 +68,14 @@ function changed() {
 
 function text(path, label, placeholder = '') {
   return h('label', { class: 'f' }, label,
-    h('input', { type: 'text', value: getPath(path) ?? '', placeholder,
+    h('input', { type: 'text', value: getPath(path) ?? '', placeholder, 'data-path': path.join('.'),
       onfocus: (e) => { lastFocus = { el: e.target, path }; },
       oninput: (e) => { setPath(path, e.target.value); changed(); } }));
 }
 
 function area(path, label, placeholder = '') {
   return h('label', { class: 'f' }, label,
-    h('textarea', { rows: 4, placeholder,
+    h('textarea', { rows: 4, placeholder, 'data-path': path.join('.'),
       onfocus: (e) => { lastFocus = { el: e.target, path }; },
       oninput: (e) => { setPath(path, e.target.value); changed(); } }, getPath(path) ?? ''));
 }
@@ -78,7 +84,7 @@ function area(path, label, placeholder = '') {
 function number(path, label, step = 0.5, blankHint = '') {
   const v = getPath(path);
   return h('label', { class: 'f' }, label,
-    h('input', { type: 'number', step, value: v == null ? '' : v, placeholder: blankHint,
+    h('input', { type: 'number', step, value: v == null ? '' : v, placeholder: blankHint, 'data-path': path.join('.'),
       oninput: (e) => { setPath(path, e.target.value === '' ? null : Number(e.target.value)); changed(); } }));
 }
 
@@ -199,10 +205,18 @@ function buildPanel() {
 }
 
 
-/* Preview ------------------------------------------------------------------ */
+/* Preview: the PDF drawn on a canvas, with clickable areas on top --------- */
 
 let timer = null, rendering = false, again = false;
-function scheduleRender() { clearTimeout(timer); timer = setTimeout(renderNow, 200); }
+function scheduleRender(ms = 150) { clearTimeout(timer); timer = setTimeout(renderNow, ms); }
+
+async function loadPdfJs() {
+  if (!pdfjs) {
+    pdfjs = await import('https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/build/pdf.min.mjs');
+    pdfjs.GlobalWorkerOptions.workerSrc = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/build/pdf.worker.min.mjs';
+  }
+  return pdfjs;
+}
 
 async function renderNow() {
   if (rendering) { again = true; return; }
@@ -212,12 +226,31 @@ async function renderNow() {
     const c = country();
     const s = data.samples[c.code];
     const inv = { ...s, date: new Date(s.date), docType: $('#doctype').value,
-                  country: { ...c, template: tpl } };
+                  country: { ...c, template: tpl }, spots: [] };
     const bytes = await renderInvoicePdf(inv);
+
     const url = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }));
-    $('#pdf').src = url + '#toolbar=0&navpanes=0&view=FitH';
-    if (pdfUrl) setTimeout(((u) => () => URL.revokeObjectURL(u))(pdfUrl), 2000);
+    $('#open-pdf').href = url;
+    if (pdfUrl) setTimeout(((u) => () => URL.revokeObjectURL(u))(pdfUrl), 60000);
     pdfUrl = url;
+
+    // Draw off-screen, then swap in, so the page never flickers
+    const lib = await loadPdfJs();
+    const doc = await lib.getDocument({ data: bytes.slice() }).promise;
+    const pg = await doc.getPage(1);
+    const cssW = $('#page').clientWidth || 800;
+    const scale = (cssW / PAGE_W) * (window.devicePixelRatio || 1);
+    const vp = pg.getViewport({ scale });
+    const off = document.createElement('canvas');
+    off.width = Math.round(vp.width); off.height = Math.round(vp.height);
+    await pg.render({ canvasContext: off.getContext('2d'), viewport: vp }).promise;
+    const cv = $('#canvas');
+    cv.width = off.width; cv.height = off.height;
+    cv.getContext('2d').drawImage(off, 0, 0);
+    doc.destroy();
+
+    spots = inv.spots;
+    drawSpots();
     err.hidden = true;
   } catch (e) {
     console.error(e);
@@ -229,11 +262,233 @@ async function renderNow() {
   }
 }
 
+const k = () => ($('#page').clientWidth || 800) / PAGE_W;          // CSS pixels per point
+const same = (a, b) => !!a && !!b && a.join('.') === b.join('.');
+const MOVABLE = { logo: 1, header: 1, stamp: 1, title: 1 };
+const pct = (v, of) => (v / of * 100) + '%';
+
+function drawSpots() {
+  const layer = $('#spots');
+  layer.replaceChildren(...spots.map((sp) => {
+    const el = h('div', { class: 'spot' + (MOVABLE[sp.kind] ? ' move' : '') + (same(sp.path, selected) ? ' sel' : ''),
+                          title: describe(sp.path) });
+    // In % of the page, so the boxes stay put when the window is resized
+    Object.assign(el.style, { left: pct(sp.x - 2, PAGE_W), top: pct(sp.top - 2, PAGE_H),
+                              width: pct(sp.w + 4, PAGE_W), height: pct(sp.h + 4, PAGE_H) });
+    el.addEventListener('pointerdown', (e) => startDrag(e, sp, el));
+    return el;
+  }));
+  placePop();
+}
+
+function describe(path) {
+  const [a, b, c] = path;
+  if (a === 'logo') return 'Logo';
+  if (a === 'header') return `Letterhead line ${c + 1}`;
+  if (a === 'stamp') return 'Stamp';
+  if (a === 'title') return `Title (${b})`;
+  if (a === 'labels') return { billTo: 'Bill to label', invoiceNo: 'Invoice no. label', po: 'PO label', date: 'Date label',
+                               terms: 'Terms label', currencyNote: 'Currency note' }[b] || 'Label';
+  if (a === 'footer') return { bankTitle: 'Bank heading', bank: 'Bank lines', notes: 'Notes', footnote: 'Footnote' }[b] ||
+                             (b === 'signatures' ? `Signature ${c + 1}` : 'Footer');
+  return path.join(' › ');
+}
+
+
+/* Click to select, drag to move ------------------------------------------- */
+
+/** What dragging an item changes: the whole letterhead moves together. */
+function moveTarget(sp) {
+  if (sp.kind === 'logo') return { x: ['logo', 'x'], y: ['logo', 'top'], dx: 58.5, dy: 72.6 };
+  if (sp.kind === 'header') return { x: ['header', 'x'], y: ['header', 'top'], dx: 124.8, dy: 70.2 };
+  if (sp.kind === 'stamp') return { x: ['stamp', 'right'], y: ['stamp', 'top'], dx: 522.1, dy: sp.top };
+  if (sp.kind === 'title') return { x: ['title', 'x'], y: ['title', 'gap'], dx: 65.8, dy: 7 };
+  return null;
+}
+
+function nudge(sp, dxPt, dyPt) {
+  const t = moveTarget(sp);
+  if (!t) return;
+  const round = (n) => Math.round(n * 2) / 2;                     // half points
+  const gx = getPath(t.x), gy = getPath(t.y);
+  setPath(t.x, round((gx == null ? t.dx : gx) + dxPt));
+  setPath(t.y, round((gy == null ? t.dy : gy) + dyPt));
+  changed();
+  schedulePanel();                                                 // show the new numbers there too
+}
+
+function startDrag(e, sp, el) {
+  e.preventDefault();
+  const x0 = e.clientX, y0 = e.clientY;
+  let moved = false;
+  try { el.setPointerCapture(e.pointerId); } catch (err) { /* keeps working without capture */ }
+  const onMove = (ev) => {
+    const dx = ev.clientX - x0, dy = ev.clientY - y0;
+    if (!moved && Math.hypot(dx, dy) < 4) return;
+    if (!MOVABLE[sp.kind]) return;
+    moved = true;
+    el.classList.add('dragging');
+    el.style.transform = `translate(${dx}px, ${dy}px)`;
+  };
+  const onUp = (ev) => {
+    el.removeEventListener('pointermove', onMove);
+    el.removeEventListener('pointerup', onUp);
+    if (moved) {
+      const s = k();
+      nudge(sp, (ev.clientX - x0) / s, (ev.clientY - y0) / s);
+      select(sp.path);
+    } else {
+      select(sp.path);
+    }
+  };
+  el.addEventListener('pointermove', onMove);
+  el.addEventListener('pointerup', onUp);
+}
+
+function select(path) {
+  selected = path;
+  buildPop();
+  drawSpots();
+}
+
+document.addEventListener('keydown', (e) => {
+  if (!selected) return;
+  const inField = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement && document.activeElement.tagName);
+  if (e.key === 'Escape') { selected = null; $('#pop').hidden = true; drawSpots(); return; }
+  if (inField) return;
+  const sp = spots.find((x) => same(x.path, selected));
+  if (!sp || !MOVABLE[sp.kind]) return;
+  const step = e.shiftKey ? 5 : 0.5;
+  const d = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] }[e.key];
+  if (d) { e.preventDefault(); nudge(sp, d[0], d[1]); }
+});
+
+$('#page').addEventListener('pointerdown', (e) => {
+  if (e.target.id === 'canvas') { selected = null; $('#pop').hidden = true; drawSpots(); }
+});
+
+
+/* The little editor that pops up by a clicked item ------------------------ */
+
+function popText(path, label, multi = false) {
+  const attrs = { 'data-pop': path.join('.'), placeholder: label,
+    onfocus: (e) => { lastFocus = { el: e.target, path }; },
+    oninput: (e) => { setPath(path, e.target.value); changed(true); } };
+  return h('label', { class: 'f' }, label, multi
+    ? h('textarea', { rows: 4, ...attrs }, getPath(path) ?? '')
+    : h('input', { type: 'text', value: getPath(path) ?? '', ...attrs }));
+}
+
+function popNumber(path, label, fallback, step = 0.5) {
+  const v = getPath(path);
+  return h('label', { class: 'f' }, label, h('input', { type: 'number', step, value: v == null ? '' : v, placeholder: fallback ?? '',
+    'data-pop': path.join('.'),
+    oninput: (e) => { setPath(path, e.target.value === '' ? null : Number(e.target.value)); changed(true); } }));
+}
+
+function popToggle(path, label, cls) {
+  const on = !!getPath(path);
+  return h('button', { class: 'toggle ' + cls + (on ? ' on' : ''), type: 'button', title: label,
+    onclick: (e) => { setPath(path, !getPath(path)); e.currentTarget.classList.toggle('on'); changed(true); } },
+    cls === 'b' ? 'B' : 'I');
+}
+
+function buildPop() {
+  const pop = $('#pop');
+  if (!selected) { pop.hidden = true; return; }
+  const p = selected;
+  const [a, b, c] = p;
+  const body = [];
+  const actions = [];
+
+  if (a === 'header') {
+    const lines = tpl.header.lines;
+    body.push(h('div', { class: 'row' }, popText([...p, 'label'], 'Label (bold)'), popText([...p, 'text'], 'Text')));
+    body.push(h('div', { class: 'tools-row' },
+      popNumber([...p, 'size'], 'Size', 6.8), popNumber([...p, 'gap'], 'Space above', 0),
+      popToggle([...p, 'bold'], 'Bold', 'b'), popToggle([...p, 'italic'], 'Italic', 'i')));
+    actions.push(
+      h('button', { class: 'icon', type: 'button', title: 'Move up', disabled: c === 0,
+        onclick: () => { lines.splice(c - 1, 0, lines.splice(c, 1)[0]); selected = ['header', 'lines', c - 1]; changed(true); buildPop(); } }, '↑'),
+      h('button', { class: 'icon', type: 'button', title: 'Move down', disabled: c === lines.length - 1,
+        onclick: () => { lines.splice(c + 1, 0, lines.splice(c, 1)[0]); selected = ['header', 'lines', c + 1]; changed(true); buildPop(); } }, '↓'),
+      h('button', { class: 'icon', type: 'button', title: 'Remove this line',
+        onclick: () => { lines.splice(c, 1); selected = null; pop.hidden = true; changed(true); } }, '✕'));
+  } else if (a === 'logo') {
+    body.push(h('div', { class: 'tools-row' }, popNumber(['logo', 'size'], 'Size', 59)));
+    actions.push(h('button', { class: 'btn ghost small', type: 'button',
+      onclick: () => { setPath(['logo', 'show'], false); selected = null; pop.hidden = true; changed(true); } }, 'Hide logo'));
+  } else if (a === 'stamp') {
+    body.push(popText(['stamp', 'text'], 'Text'));
+    body.push(h('div', { class: 'tools-row' }, popNumber(['stamp', 'size'], 'Size', 9)));
+  } else if (a === 'title') {
+    body.push(popText(p, 'Title'));
+    body.push(h('div', { class: 'tools-row' }, popNumber(['title', 'size'], 'Size', 14)));
+  } else if (a === 'labels') {
+    body.push(popText(p, 'Text'));
+  } else if (a === 'footer' && b === 'signatures') {
+    body.push(popText([...p, 'label'], 'Label under the line'));
+    actions.push(h('button', { class: 'icon', type: 'button', title: 'Remove this signature line',
+      onclick: () => { tpl.footer.signatures.splice(c, 1); selected = null; pop.hidden = true; changed(true); } }, '✕'));
+  } else if (a === 'footer') {
+    const multi = b === 'bank' || b === 'notes';
+    body.push(popText(p, describe(p), multi));
+    const sizeKey = { bank: 'bankSize', notes: 'notesSize', footnote: 'footnoteSize' }[b];
+    if (sizeKey) body.push(h('div', { class: 'tools-row' }, popNumber(['footer', sizeKey], 'Size')));
+  }
+
+  pop.replaceChildren(
+    h('div', { class: 'pop-head' }, h('b', {}, describe(p)), ...actions,
+      h('button', { class: 'icon', type: 'button', title: 'Close', onclick: () => { selected = null; pop.hidden = true; drawSpots(); } }, '×')),
+    ...body,
+    h('button', { class: 'btn ghost small', type: 'button', onclick: () => showInPanel(p) }, 'All settings for this →'));
+  pop.hidden = false;
+  placePop();
+}
+
+/** Keep the editor beside its item after every redraw. */
+function placePop() {
+  const pop = $('#pop');
+  if (pop.hidden || !selected) return;
+  const sp = spots.find((x) => same(x.path, selected));
+  if (!sp) return;
+  const s = k(), pageW = $('#page').clientWidth;
+  let left = sp.x * s, top = (sp.top + sp.h) * s + 8;
+  left = Math.max(8, Math.min(left, pageW - pop.offsetWidth - 8));
+  pop.style.left = left + 'px';
+  pop.style.top = top + 'px';
+}
+
+/** Rebuild the editor after a panel change, unless it is being typed in. */
+function refreshPop() {
+  if (!selected || $('#pop').hidden) return;
+  if ($('#pop').contains(document.activeElement)) return;
+  buildPop();
+}
+
+let panelTimer = null;
+function schedulePanel() { clearTimeout(panelTimer); panelTimer = setTimeout(buildPanel, 400); }
+
+function showInPanel(path) {
+  const key = path.join('.');
+  const el = [...panel.querySelectorAll('[data-path]')].find((x) => x.dataset.path.startsWith(key));
+  if (!el) return;
+  const d = el.closest('details');
+  if (d) d.open = true;
+  const box = el.closest('.item') || el.closest('.f') || el;
+  box.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  box.classList.remove('flash'); void box.offsetWidth; box.classList.add('flash');
+}
+
+window.addEventListener('resize', () => { placePop(); scheduleRender(250); });
+
 
 /* Loading, switching, saving --------------------------------------------------- */
 
 function openCountry(c) {
   code = c;
+  selected = null;
+  $('#pop').hidden = true;
   tpl = clone(resolveTemplate(country()));
   savedJson = JSON.stringify(tpl);
   buildPanel();
