@@ -11,6 +11,7 @@ import crypto from 'node:crypto';
 import { tg } from '../lib/telegram.js';
 import { readTables, headerIndex } from '../lib/sheets.js';
 import { ensureTrackerColumns } from '../lib/workflow.js';
+import { driveConfigured, driveCheck } from '../lib/drive.js';
 
 export default async function handler(req, res) {
   // Compare fixed-length hashes so the check takes the same time either way
@@ -101,6 +102,14 @@ export default async function handler(req, res) {
     }
     if (!t[CONFIG.CUSTOMERS_SHEET]) out.push(`⚠️ No "${CONFIG.CUSTOMERS_SHEET}" tab: customers will not be remembered`);
     else ok(`Customers: ${t[CONFIG.CUSTOMERS_SHEET].rows.length} rows`);
+
+    if (!driveConfigured()) {
+      out.push('⚠️ Google Drive: not set up, so the Tracker gets the app\'s own PDF links. ' +
+               `See the README, then open ${url}/api/google-auth?key=<your secret>`);
+    } else {
+      try { ok(`Google Drive: saving into ${await driveCheck()}`); }
+      catch (e) { bad(e.message); }
+    }
 
     out.push('', `Form address: ${url}/`, '',
       'Last step, in @BotFather: /mybots > your bot > Bot Settings > Configure Mini App >',
