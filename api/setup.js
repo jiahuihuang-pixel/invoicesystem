@@ -9,7 +9,8 @@ import { CONFIG, env, appUrl, adminIds } from '../lib/config.js';
 import { parseCountries } from '../lib/countries.js';
 import crypto from 'node:crypto';
 import { tg } from '../lib/telegram.js';
-import { readTables, headerIndex } from '../lib/sheets.js';
+import { readTables, readTable, headerIndex, ensureSheet } from '../lib/sheets.js';
+import { parseCustomerPrices } from '../lib/invoice.js';
 import { ensureTrackerColumns } from '../lib/workflow.js';
 import { driveConfigured, driveCheck } from '../lib/drive.js';
 
@@ -102,6 +103,14 @@ export default async function handler(req, res) {
     }
     if (!t[CONFIG.CUSTOMERS_SHEET]) out.push(`⚠️ No "${CONFIG.CUSTOMERS_SHEET}" tab: customers will not be remembered`);
     else ok(`Customers: ${t[CONFIG.CUSTOMERS_SHEET].rows.length} rows`);
+
+    // Special prices per customer
+    if (await ensureSheet(CONFIG.CUSTOMER_PRICES_SHEET, ['Customer', 'Product', 'Price', 'Country'])) {
+      ok(`Created the "${CONFIG.CUSTOMER_PRICES_SHEET}" tab: one row per special price (Country is optional)`);
+    } else {
+      const cp = parseCustomerPrices(await readTable(CONFIG.CUSTOMER_PRICES_SHEET));
+      ok(`Customer prices: ${cp.length} special price(s)`);
+    }
 
     if (!driveConfigured()) {
       out.push('⚠️ Google Drive: not set up, so the Tracker gets the app\'s own PDF links. ' +
