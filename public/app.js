@@ -17,7 +17,7 @@
   const W = window.Telegram && window.Telegram.WebApp;
   const tg = W && W.platform && W.platform !== 'unknown' ? W : null;
   const DEMO = /[?&]demo=1\b/.test(location.search);
-  const VERSION = '30 Sep 2026';          // shown on the first step, to check the newest form is loaded
+  const VERSION = '15 Oct 2026';          // shown on the first step, to check the newest form is loaded
   const initData = tg ? tg.initData : '';
 
   const STEPS = ['country', 'customer', 'items', 'details', 'review'];
@@ -381,12 +381,14 @@
         (state.country.taxRate > 1 ? ', GST included.' : '.') +
         (hasSpecials() && !state.originalPrices ? ` ${state.customer.name}'s special prices are marked.` : '') +
         (margin() && !state.originalPrices ? ` ${round2(margin() * 100)}% customer discount on the rest is applied at the end.` : '')),
-      hasSpecials() ? h('div', { class: 'card' },
+      hasSpecials() || margin() ? h('div', { class: 'card' },
         h('label', { class: 'switch' },
           h('input', { type: 'checkbox', checked: state.originalPrices,
             onchange: (e) => { state.originalPrices = e.target.checked; reprice(); haptic(); render(); } }),
           h('span', {}, h('b', {}, 'Use original prices'),
-            h('span', { class: 'hint', style: 'display:block' }, 'Charge the normal list price this time, not this customer\'s special prices.')))) : null,
+            h('span', { class: 'hint', style: 'display:block' }, hasSpecials()
+              ? 'Charge the normal list price this time: no special prices and no margin discount.'
+              : `Charge the normal list price this time, without the ${round2(margin() * 100)}% margin discount.`)))) : null,
       h('div', { class: 'card' }, h('h2', {}, 'Order'), cart),
       h('div', { class: 'card' }, h('div', { class: 'search' }, search), results)
     ];
@@ -483,7 +485,7 @@
                         oninput: (e) => { state.discount = e.target.value; } }),
            h('p', { class: 'hint' }, 'Taken off the grand total.'),
            h('button', { class: 'linkbtn', type: 'button', onclick: () => { state.discountMode = 'auto'; render(); } },
-             margin() ? 'Use the customer margin instead' : 'No discount')]);
+             margin() && !state.originalPrices ? 'Use the customer margin instead' : 'No discount')]);
 
     const t = data.targets;
     const targetCard = t.fixed ? null : h('div', { class: 'card' }, h('h2', {}, 'Send the approved PDF to'),
@@ -525,7 +527,7 @@
           h('span', {}, `${it.qty} × ${it.name}`), h('span', { class: 'num' }, it.price == null ? '—' : money(it.price * it.qty)))),
         d ? h('div', { class: 'row muted' }, h('span', {}, 'Discount'), h('span', { class: 'num' }, '−' + money(d))) : null,
         h('div', { class: 'row total' }, h('span', {}, 'Grand total'), h('span', { class: 'num' }, money(total()))),
-        state.originalPrices ? h('p', { class: 'hint', style: 'margin:4px 0 0' }, 'Original prices: this customer\'s special prices are not used.')
+        state.originalPrices ? h('p', { class: 'hint', style: 'margin:4px 0 0' }, 'Original prices: no customer discount.')
           : state.items.some((it) => it.special) ? h('p', { class: 'hint', style: 'margin:4px 0 0' }, 'Includes this customer\'s special prices.') : null,
         state.country.taxRate > 1
           ? h('p', { class: 'hint', style: 'margin:4px 0 0' },

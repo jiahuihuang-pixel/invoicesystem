@@ -166,16 +166,23 @@ async function drawSingapore(inv, tools) {
   if (!pages.length) pages.push([]);
   pages[pages.length - 1].push(...inv.lines.filter((l) => l.isDiscount));
 
-  let start = 0;
-  for (let p = 0; p < pages.length; p++) {
-    if (p) tools.newPage();
-    const needed = await drawPage(inv, tools, { lines: pages[p], start, page: p, pages: pages.length });
-    const fit = tools.finishPage(needed);
-    // The Template Studio's click areas must shrink with the page
-    if (p === 0 && inv.spots && fit.s !== 1) {
-      inv.spots.forEach((sp) => { sp.x = fit.tx + sp.x * fit.s; sp.top *= fit.s; sp.w *= fit.s; sp.h *= fit.s; });
+  // Countries tab "Copies", e.g. "<ORIGINAL>, <COPY>": the whole invoice
+  // again for each, stamped with that text. Otherwise one copy, normal stamp.
+  const copies = (inv.country.company && inv.country.company.copies || []).length ? inv.country.company.copies : [null];
+  let firstPage = true;
+  for (let c = 0; c < copies.length; c++) {
+    let start = 0;
+    for (let p = 0; p < pages.length; p++) {
+      if (!firstPage) tools.newPage();
+      firstPage = false;
+      const needed = await drawPage(inv, tools, { lines: pages[p], start, page: p, pages: pages.length, copy: c, stamp: copies[c] });
+      const fit = tools.finishPage(needed);
+      // The Template Studio's click areas must shrink with the page
+      if (c === 0 && p === 0 && inv.spots && fit.s !== 1) {
+        inv.spots.forEach((sp) => { sp.x = fit.tx + sp.x * fit.s; sp.top *= fit.s; sp.w *= fit.s; sp.h *= fit.s; });
+      }
+      start += pages[p].length;
     }
-    start += pages[p].length;
   }
 }
 
@@ -185,7 +192,7 @@ async function drawPage(inv, { text, para, line, box, fill, image, bold, fontFor
   // The Template Studio passes inv.spots = [] to learn where each editable
   // item landed (page points, top-down), so it can be clicked and dragged.
   const spot = (path, x, top, w, h, kind = 'text') => {
-    if (inv.spots && pg.page === 0) inv.spots.push({ path, x, top, w: Math.max(w, 6), h: Math.max(h, 4), kind });
+    if (inv.spots && pg.page === 0 && !pg.copy) inv.spots.push({ path, x, top, w: Math.max(w, 6), h: Math.max(h, 4), kind });
   };
   const values = fieldValues(inv.country);
   const f = (s) => fillFields(s, values);
@@ -239,7 +246,7 @@ async function drawPage(inv, { text, para, line, box, fill, image, bold, fontFor
 
   /* ---- Stamp (e.g. <ORIGINAL>) ------------------------------------- */
   const S = T.stamp || {};
-  const stamp = f(S.text);
+  const stamp = pg.stamp != null ? pg.stamp : f(S.text);   // a copy's own stamp wins
   if (stamp) {
     const size = num(S.size, 9);
     const stampTop = S.top === null || S.top === '' || S.top === undefined ? lastTop - 1 : num(S.top, lastTop - 1);

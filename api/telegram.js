@@ -17,6 +17,7 @@
  *   🧾 Convert to tax invoice   a manager asks; you get ✅ Convert and send
  *                               (which posts the tax invoice to the group)
  *                               or ❌ Not yet
+
  */
 import { CONFIG, env, isAdmin, appUrl } from '../lib/config.js';
 import { tg, send, answer, kb, esc, startParamForGroup } from '../lib/telegram.js';

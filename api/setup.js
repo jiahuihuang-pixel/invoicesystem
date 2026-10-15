@@ -9,8 +9,8 @@ import { CONFIG, env, appUrl, adminIds } from '../lib/config.js';
 import { parseCountries } from '../lib/countries.js';
 import crypto from 'node:crypto';
 import { tg } from '../lib/telegram.js';
-import { readTables, readTable, headerIndex, ensureSheet } from '../lib/sheets.js';
-import { parseCustomerPrices } from '../lib/invoice.js';
+import { readTables, headerIndex, normKey } from '../lib/sheets.js';
+import { parseCustomerPrices, parsePriceBook } from '../lib/invoice.js';
 import { ensureTrackerColumns } from '../lib/workflow.js';
 import { driveConfigured, driveCheck } from '../lib/drive.js';
 
@@ -75,7 +75,7 @@ export default async function handler(req, res) {
         const C = c.company;
         out.push(`     letterhead: ` + [
           ['Company Name', C.name], ['Reg No Label', C.regLabel], ['GST Reg No', C.gstRegNo], ['Address', C.store],
-          ['Tel', C.tel], ['Website', C.website], ['Email', C.email], ['Stamp', C.stamp], ['Invoice Title', C.invoiceTitle]
+          ['Tel', C.tel], ['Website', C.website], ['Email', C.email], ['Stamp', C.stamp], ['Copies', (C.copies || []).join(' + ')], ['Invoice Title', C.invoiceTitle]
         ].map(([k, v]) => `${k}=${v ? '"' + (v.length > 40 ? v.slice(0, 40) + '…' : v) + '"' : '(blank)'}`).join(', '));
         } else out.push(`⚠️ ${c.name}: not ready, greyed out in the form` +
                       (c.missing.length ? ` (Countries tab is missing ${c.missing.join(', ')})` : ' (Ready is not ticked)'));
@@ -104,12 +104,41 @@ export default async function handler(req, res) {
     if (!t[CONFIG.CUSTOMERS_SHEET]) out.push(`⚠️ No "${CONFIG.CUSTOMERS_SHEET}" tab: customers will not be remembered`);
     else ok(`Customers: ${t[CONFIG.CUSTOMERS_SHEET].rows.length} rows`);
 
-    // Special prices per customer
-    if (await ensureSheet(CONFIG.CUSTOMER_PRICES_SHEET, ['Customer', 'Product', 'Price', 'Country'])) {
-      ok(`Created the "${CONFIG.CUSTOMER_PRICES_SHEET}" tab: one row per special price (Country is optional)`);
-    } else {
-      const cp = parseCustomerPrices(await readTable(CONFIG.CUSTOMER_PRICES_SHEET));
-      ok(`Customer prices: ${cp.length} special price(s)`);
+    // Special prices per customer: the Price Book Helper grid and/or the Customer Prices list
+    if (!CONFIG.USE_SPECIAL_PRICES) ok('Pricing: list prices with each customer\'s Margin % as a discount (special prices are switched off)');
+    else {
+    const pt = await readTables([CONFIG.PRICE_BOOK_SHEET, CONFIG.CUSTOMER_PRICES_SHEET, CONFIG.CUSTOMERS_SHEET]);
+    const customerKeysAll = new Set();
+    if (pt[CONFIG.CUSTOMERS_SHEET]) {
+      const h = pt[CONFIG.CUSTOMERS_SHEET].headers;
+      const ni = headerIndex(h, 'Customer Name'), ii = headerIndex(h, 'Customer ID');
+      pt[CONFIG.CUSTOMERS_SHEET].rows.forEach((r) => {
+        if (ni >= 0 && r[ni] !== '') customerKeysAll.add(normKey(r[ni]));
+        if (ii >= 0 && r[ii] !== '') customerKeysAll.add(normKey(r[ii]));
+      });
+    }
+    const unknown = (entries) => [...new Set(entries.filter((e) => !customerKeysAll.has(e.customer)).map((e) => e.customer))];
+
+    if (pt[CONFIG.PRICE_BOOK_SHEET]) {
+      const book = parsePriceBook(pt[CONFIG.PRICE_BOOK_SHEET]);
+      ok(`${CONFIG.PRICE_BOOK_SHEET}: ${book.length} special price(s) for ${book.companies.length} company column(s): ` +
+         (book.companies.join(', ') || '(none found)'));
+      const notFound = (book.companies || []).filter((c) => !customerKeysAll.has(normKey(c)));
+      if (notFound.length) {
+        out.push(`⚠️ ${CONFIG.PRICE_BOOK_SHEET}: these columns don't match any Customer Name or Customer ID on the ` +
+                 `Customers tab, so their prices are never used: ${notFound.join(', ')}`);
+      }
+    }
+    if (pt[CONFIG.CUSTOMER_PRICES_SHEET]) {
+      const cp = parseCustomerPrices(pt[CONFIG.CUSTOMER_PRICES_SHEET]);
+      ok(`${CONFIG.CUSTOMER_PRICES_SHEET}: ${cp.length} special price(s)`);
+      const bad = unknown(cp);
+      if (bad.length) out.push(`⚠️ ${CONFIG.CUSTOMER_PRICES_SHEET}: customers not on the Customers tab: ${bad.join(', ')}`);
+    }
+    if (!pt[CONFIG.PRICE_BOOK_SHEET] && !pt[CONFIG.CUSTOMER_PRICES_SHEET]) {
+      out.push(`⚠️ No special prices: add a "${CONFIG.PRICE_BOOK_SHEET}" tab (products down the side, one column per company) ` +
+               `or a "${CONFIG.CUSTOMER_PRICES_SHEET}" tab (Customer | Product | Price)`);
+    }
     }
 
     if (!driveConfigured()) {
