@@ -178,7 +178,10 @@ function buildPanel() {
     section('Labels', false,
       h('div', { class: 'row' }, text(['labels', 'billTo'], 'Bill to'), text(['labels', 'invoiceNo'], 'Invoice no.')),
       h('div', { class: 'row' }, text(['labels', 'po'], 'PO no.'), text(['labels', 'date'], 'Date'), text(['labels', 'terms'], 'Terms')),
-      text(['labels', 'currencyNote'], 'Currency note (beside the totals)')),
+      text(['labels', 'currencyNote'], 'Currency note (beside the totals)'),
+      h('p', { class: 'hint' }, 'Buyer tax details, printed for customers with a Tax ID on the Customers tab:'),
+      h('div', { class: 'row' }, text(['labels', 'taxId'], 'Tax ID label'), text(['labels', 'headOffice'], 'Head office'),
+                                 text(['labels', 'branch'], 'Branch'))),
 
     section('Footer', true,
       h('div', { class: 'checks' }, check(['footer', 'showBank'], 'Show bank details', true)),

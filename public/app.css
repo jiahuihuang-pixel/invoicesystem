@@ -151,3 +151,8 @@ input:focus, textarea:focus, select:focus { border-color: var(--accent); backgro
 .list .price .was { display: block; font-size: 12px; color: var(--hint); text-align: right; }
 .switch { display: flex; gap: 12px; align-items: flex-start; cursor: pointer; font-size: 15px; }
 .switch input { width: 20px; height: 20px; margin: 2px 0 0; accent-color: var(--accent); flex: none; }
+
+/* Thai address boxes */
+.f-thai { display: grid; gap: 4px; margin-top: 10px; font-weight: 500; font-size: 13px; }
+.f-thai input { font-weight: 400; }
+.row-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }

@@ -66,7 +66,9 @@ export function defaultTemplate(country) {
     title: { invoice: '{Invoice Title}', quotation: 'QUOTATION', proforma: 'PROFORMA INVOICE',
              size: 14, x: 65.8, gap: 7 },
     labels: { billTo: 'BILL TO', invoiceNo: 'Invoice No:', po: 'PO No.:', date: 'Date:', terms: 'Terms:',
-              currencyNote: '{Currency Note}' },
+              currencyNote: '{Currency Note}',
+              // The buyer's tax details, printed when the customer has them (Thai tax invoices)
+              taxId: 'Tax ID:', headOffice: 'Head Office', branch: 'Branch' },
     footer: {
       showBank: true,
       bankTitle: 'BANK ACCOUNT DETAILS:',

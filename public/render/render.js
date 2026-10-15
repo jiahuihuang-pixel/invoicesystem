@@ -13,6 +13,7 @@
  * Returns the PDF as a Uint8Array.
  */
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
+import fontkit from '@pdf-lib/fontkit';
 import { LOGO_JPG_BASE64, LOGO_GREY_JPG_BASE64 } from './logo.js';
 import { resolveTemplate, fieldValues, fill as fillFields } from './template.js';
 
@@ -25,6 +26,18 @@ const BLACK = rgb(0, 0, 0);
 const WHITE = rgb(1, 1, 1);
 const LINK = rgb(0x11 / 255, 0x55 / 255, 0xcc / 255);
 const HEAD_FILL = rgb(0.847, 0.847, 0.847);
+
+// Thai script. Helvetica has no Thai letters, so any text containing Thai
+// is drawn with Sarabun (fonts/, Open Font License); everything else keeps
+// the original look.
+const THAI = /[\u0E00-\u0E7F]/;
+
+/** Font bytes. In the browser they come from the site; the server passes its own loader. */
+async function fetchFont(name) {
+  const res = await fetch(new URL('./fonts/' + name, import.meta.url));
+  if (!res.ok) throw new Error('Could not load the Thai font ' + name);
+  return new Uint8Array(await res.arrayBuffer());
+}
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
@@ -52,15 +65,15 @@ const num = (v, d) => (v === '' || v == null || isNaN(Number(v)) ? d : Number(v)
  * Helvetica can only print Latin-1 characters. Straighten the usual
  * suspects and replace anything else with "?" instead of crashing.
  */
-function clean(s) {
+function clean(s, thai = false) {
   return String(s == null ? '' : s)
     .replace(/[‘’]/g, "'").replace(/[“”]/g, '"').replace(/[–—]/g, '-').replace(/…/g, '...')
     .replace(/[\t\r\n]+/g, ' ')
-    .replace(/[^\x20-\x7E\xA0-\xFF]/g, '?');
+    .replace(thai ? /[^\x20-\x7E\xA0-\xFF\u0E00-\u0E7F]/g : /[^\x20-\x7E\xA0-\xFF]/g, '?');
 }
 
 
-export async function renderInvoicePdf(inv) {
+export async function renderInvoicePdf(inv, { loadFont = fetchFont } = {}) {
   const pdf = await PDFDocument.create();
   pdf.setTitle(`${inv.docType} ${inv.invoiceId}`);
   pdf.setAuthor((inv.country.company && inv.country.company.name) || '');
@@ -71,9 +84,22 @@ export async function renderInvoicePdf(inv) {
   const boldItalic = await pdf.embedFont(StandardFonts.HelveticaBoldOblique);
   const fontFor = (b, i) => (b ? (i ? boldItalic : bold) : (i ? italic : reg));
 
+  // Thai fonts only when the invoice has Thai text in it somewhere
+  let thaiReg = null, thaiBold = null;
+  if (THAI.test(JSON.stringify(inv, (k, v) => (k === 'spots' ? undefined : v)))) {
+    pdf.registerFontkit(fontkit);
+    thaiReg = await pdf.embedFont(await loadFont('Sarabun-Regular.ttf'), { subset: false });
+    thaiBold = await pdf.embedFont(await loadFont('Sarabun-Bold.ttf'), { subset: false });
+  }
+  /** The font to draw `s` with: Sarabun (regular or bold to match) when it contains Thai. */
+  const pick = (s, font) => (thaiReg && THAI.test(String(s == null ? '' : s))
+    ? (font === bold || font === boldItalic ? thaiBold : thaiReg) : font);
+  const isThai = (font) => !!thaiReg && (font === thaiReg || font === thaiBold);
+
   // top = top edge of the text box, as measured; baseline sits ~0.905 em below
   const text = (s, x, top, { size = 6.3, font = reg, color = BLACK, align = 'left', maxWidth } = {}) => {
-    s = clean(s);
+    font = pick(s, font);
+    s = clean(s, isThai(font));
     let w = font.widthOfTextAtSize(s, size);
     if (maxWidth && w > maxWidth) {                       // shrink to fit, never below 4.5pt
       size = Math.max(4.5, size * maxWidth / w);
@@ -110,11 +136,12 @@ export async function renderInvoicePdf(inv) {
   const para = (s, x, top, width, { size = 6.3, font = reg, leading = size * 1.2, dry = false, ...o } = {}) => {
     const put = (t, at) => { if (!dry) text(t, x, at, { size, font, ...o }); };
     for (const paragraph of String(s == null ? '' : s).split(/\r?\n/)) {
-      const words = clean(paragraph).split(' ').filter(Boolean);
+      const pf = pick(paragraph, font);                      // measure with the font it will be drawn in
+      const words = clean(paragraph, isThai(pf)).split(' ').filter(Boolean);
       let lineText = '';
       for (const w of words) {
         const next = lineText ? lineText + ' ' + w : w;
-        if (lineText && font.widthOfTextAtSize(next, size) > width) {
+        if (lineText && pf.widthOfTextAtSize(next, size) > width) {
           put(lineText, top); top += leading; lineText = w;
         } else lineText = next;
       }
@@ -168,7 +195,9 @@ async function drawSingapore(inv, tools) {
 
   // Countries tab "Copies", e.g. "<ORIGINAL>, <COPY>": the whole invoice
   // again for each, stamped with that text. Otherwise one copy, normal stamp.
-  const copies = (inv.country.company && inv.country.company.copies || []).length ? inv.country.company.copies : [null];
+  // Only companies get them: an individual gets one copy with no stamp at all.
+  const set = (inv.country.company && inv.country.company.copies) || [];
+  const copies = !set.length ? [null] : inv.customerType === 'Individual' ? [''] : set;
   let firstPage = true;
   for (let c = 0; c < copies.length; c++) {
     let start = 0;
@@ -269,14 +298,23 @@ async function drawPage(inv, { text, para, line, box, fill, image, bold, fontFor
 
   /* ---- Bill to ----------------------------------------------------- */
   spot(['labels', 'billTo'], 65.8, 151.1 + shift, text(f(LB.billTo), 65.8, 151.1, { size: 6.8, font: bold }), 8.2);
-  text(inv.customer, 124.8, 151.1, { size: 6.8, font: bold, maxWidth: 230 });
-  const billLines = [...String(inv.address || '').split(/\r?\n/), inv.email]
-    .map((s) => String(s || '').trim()).filter(Boolean).slice(0, 5);
-  billLines.forEach((s, i) => text(s, 124.8, 161.3 + i * 8.1, { size: 6.8, maxWidth: 230 }));
+  // A company with a Tax ID is shown with its Head Office / Branch, as Thai
+  // tax invoices require; "00001" style numbers become "Branch 00001".
+  const branchRaw = String(inv.customerBranch || '').trim();
+  const branch = !branchRaw ? (inv.customerTaxId ? f(LB.headOffice) : '')
+    : /^\d+$/.test(branchRaw) ? (/^0+$/.test(branchRaw) ? f(LB.headOffice) : `${f(LB.branch)} ${branchRaw.padStart(5, '0')}`)
+    : branchRaw;
+  text(inv.customer + (branch ? ` (${branch})` : ''), 124.8, 151.1, { size: 6.8, font: bold, maxWidth: 230 });
+  const billLines = [...String(inv.address || '').split(/\r?\n/), inv.email,
+                     inv.customerTaxId ? `${f(LB.taxId)} ${inv.customerTaxId}` : '']
+    .map((s) => String(s || '').trim()).filter(Boolean).slice(0, 6);
+  const billStep = billLines.length > 5 ? 7.3 : 8.1;          // six lines still clear the table
+  billLines.forEach((s, i) => text(s, 124.8, 161.3 + i * billStep, { size: 6.8, maxWidth: 230 }));
 
   /* ---- Invoice no / PO / date / terms ------------------------------ */
   const meta = [[LB.invoiceNo, inv.invoiceId, 'invoiceNo'], [LB.po, inv.po, 'po'], [LB.date, formatDate(inv.date), 'date'],
-                [LB.terms, inv.terms, 'terms']];
+                [LB.terms, inv.terms, 'terms']]
+    .filter(([, value, k]) => k !== 'po' || String(value || '').trim());   // no PO number, no PO line
   meta.forEach(([label, value, k], i) => {
     const t = 151.1 + i * 10.23;
     const lw = text(f(label), 431.1, t, { size: 6.8, align: 'right' });
@@ -448,7 +486,8 @@ async function drawSimple(inv, { text, line, fill, image, reg, bold }) {
   [['Date:', formatDate(inv.date)],
    [`${inv.docType} No.:`, inv.invoiceId],
    ['PO Number:', inv.po],
-   ['Terms:', inv.terms]].forEach(([label, value], i) => {
+   ['Terms:', inv.terms]].filter(([label, value]) => label !== 'PO Number:' || String(value || '').trim())
+    .forEach(([label, value], i) => {
     const top = 131.6 + i * 13.7;
     text(label, 294.3, top, { size: S, font: bold });
     text(value, 426.3, top, { size: S, maxWidth: 556 - 426.3 });

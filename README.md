@@ -146,6 +146,33 @@ which was used, so Regenerate prices it the same way.
 
 On the Countries tab, a **Copies** column with e.g. `<ORIGINAL>, <COPY>` makes that country's
 PDF contain the whole invoice once per entry, each stamped with its own text, in one file.
+This is for **companies** only: a customer whose **Customer Type** (Customers tab) is
+`Individual` gets one copy with no stamp. Blank counts as Company. When a manager adds a new
+customer for such a country, the form asks "Company or individual?" and saves the answer.
+
+Invoices without a PO number leave out the PO line.
+
+## Thai company details
+
+New customers in Thailand enter their address as separate boxes, in the Thai tax-invoice
+order: House No./Building/Room, Moo, Soi, Road, Sub-district (Khwaeng/Tambon), District
+(Khet/Amphoe), Province, Postcode. Companies also give their 13-digit **Tax ID** and
+**Head Office** or **Branch No.** These are saved on the Customers tab (**Tax ID** and
+**Branch** columns, added automatically) and printed under BILL TO:
+
+```
+BILL TO   บริษัท สยามออดิโอ จำกัด (Branch 00001)
+          88 อาคารเดอะพาร์ค ห้อง 08-138, ถนนรัชดาภิเษก
+          แขวงคลองเตย, เขตคลองเตย
+          กรุงเทพมหานคร 10110
+          Tax ID: 0105566120449
+```
+
+English or Thai script both print: any text with Thai letters uses the **Sarabun** font
+(`public/render/fonts/`, Open Font License, see `OFL.txt`). For customers you add to the
+sheet yourself, type the Tax ID and Branch into those columns; a Tax ID that Sheets turned
+into a number (lost its leading 0) is fixed when read. The labels ("Tax ID:", "Head Office",
+"Branch") can be changed in the Template Studio under Labels.
 
 ## Template Studio (editing each country's invoice)
 

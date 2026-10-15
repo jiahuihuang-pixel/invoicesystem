@@ -17,7 +17,7 @@
   const W = window.Telegram && window.Telegram.WebApp;
   const tg = W && W.platform && W.platform !== 'unknown' ? W : null;
   const DEMO = /[?&]demo=1\b/.test(location.search);
-  const VERSION = '15 Oct 2026';          // shown on the first step, to check the newest form is loaded
+  const VERSION = '21 Oct 2026 (TH)';          // shown on the first step, to check the newest form is loaded
   const initData = tg ? tg.initData : '';
 
   const STEPS = ['country', 'customer', 'items', 'details', 'review'];
@@ -35,6 +35,8 @@
     docType: '', terms: '', po: '',
     discountMode: 'auto', discount: '',
     originalPrices: false,           // true = ignore this customer's special prices this time
+    customerType: 'Company',         // new customers only: Company or Individual
+    th: blankThai(),                 // new Thai customers: address parts + tax details
     targetId: ''
   };
 
@@ -84,7 +86,7 @@
       it.price = priceOf(p);
     });
   }
-  const norm = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  const norm = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9\u0E00-\u0E7F]/g, '');   // Thai letters kept
   const round2 = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
   const haptic = (kind) => { try { tg.HapticFeedback.impactOccurred(kind || 'light'); } catch (e) {} };
 
@@ -169,7 +171,11 @@
     if (name === 'country' && !state.country) return 'Choose a country.';
     if (name === 'customer') {
       if (!state.name.trim()) return 'Type or pick the customer first.';
-      if (!state.customer && !state.address.trim()) return 'Add a billing address for this new customer.';
+      if (thaiMode()) {
+        const problem = thaiProblem();
+        if (problem) return problem;
+        state.address = thaiAddressText();          // what the review step and the invoice show
+      } else if (!state.customer && !state.address.trim()) return 'Add a billing address for this new customer.';
       if (state.email && !/^\S+@\S+\.\S+$/.test(state.email.trim())) return 'That email address does not look right.';
     }
     if (name === 'items') {
@@ -281,7 +287,8 @@
           h('div', { class: 'grow' },
             h('div', { class: 'name' }, c.name),
             h('div', { class: 'details' }, [c.address, c.email, c.terms].filter(Boolean).join('\n') || 'No details saved yet'),
-            c.margin ? h('span', { class: 'badge' }, `${round2(c.margin * 100)}% off list for this customer`) : null),
+            c.margin ? h('span', { class: 'badge' }, `${round2(c.margin * 100)}% off list for this customer`) : null,
+            state.country && state.country.hasCopies && c.type === 'Individual' ? h('span', { class: 'badge' }, 'Individual: one copy') : null),
           h('button', { class: 'linkbtn', type: 'button', onclick: () => { clearCustomer(); render(); } }, 'Change')),
         h('div', { style: 'margin-top:12px' },
           h('button', { class: 'linkbtn', type: 'button', onclick: () => { state.editDetails = true; render(); } },
@@ -302,14 +309,88 @@
           h('p', { class: 'hint' }, 'Only used on this invoice. The saved record is not changed.'),
           h('button', { class: 'linkbtn', type: 'button', onclick: () => { clearCustomer(); render(); } }, 'Pick a different customer'))
       : h('div', { class: 'card', id: 'new-fields', hidden: !state.name.trim() },
-          h('h2', {}, 'New customer'), ...detailFields(),
+          h('h2', {}, 'New customer'),
+          // Only asked where it matters: countries that print an original + copy for companies
+          state.country && state.country.hasCopies ? h('div', {},
+            h('label', {}, 'Company or individual?'),
+            h('div', { class: 'chips', role: 'group' }, ...['Company', 'Individual'].map((t) =>
+              h('button', { class: 'chip', type: 'button', 'aria-pressed': String(state.customerType === t),
+                onclick: () => { state.customerType = t; haptic(); render(); } }, t))),
+            h('p', { class: 'hint', style: 'margin:6px 0 0' }, 'Companies get an original and a copy.')) : null,
+          ...detailFields(),
           h('p', { class: 'hint' }, 'Saved to the Customers tab for next time.'));
 
     if (!state.customer) setTimeout(() => input.focus(), 50);
     return [...intro, card, extra];
   }
 
+  /* Thai tax-invoice address ------------------------------------------- */
+
+  function blankThai() {
+    return { house: '', moo: '', soi: '', road: '', sub: '', district: '', province: '', postcode: '',
+             taxId: '', office: 'Head Office', branchNo: '' };
+  }
+
+  /** A new customer in a country that uses the Thai address format. */
+  const thaiMode = () => !state.customer && !!state.country && !!state.country.thaiAddress;
+  const isCompany = () => !(state.country && state.country.hasCopies) || state.customerType === 'Company';
+
+  /** The parts in the Thai tax-invoice order, as the address lines printed under BILL TO. */
+  function thaiAddressText() {
+    const t = state.th, j = (a, sep) => a.map((x) => String(x).trim()).filter(Boolean).join(sep);
+    return j([j([t.house, t.moo, t.soi, t.road], ', '), j([t.sub, t.district], ', '), j([t.province, t.postcode], ' ')], '\n');
+  }
+
+  function thaiField(key, label, placeholder, opts = {}) {
+    return h('label', { class: 'f-thai' }, h('span', {}, label, opts.optional ? h('span', { class: 'opt' }, ' (optional)') : null),
+      h('input', { type: 'text', value: state.th[key], placeholder, inputmode: opts.numeric ? 'numeric' : null,
+                   maxlength: opts.max || null, oninput: (e) => { state.th[key] = e.target.value; } }));
+  }
+
+  function thaiFields() {
+    const t = state.th;
+    const company = isCompany();
+    return [
+      company ? h('div', {},
+        h('label', {}, 'Head office or branch?'),
+        h('div', { class: 'chips', role: 'group' }, ...['Head Office', 'Branch'].map((o) =>
+          h('button', { class: 'chip', type: 'button', 'aria-pressed': String(t.office === o),
+                        onclick: () => { t.office = o; haptic(); render(); } }, o))),
+        t.office === 'Branch' ? thaiField('branchNo', 'Branch No.', 'e.g. 00001', { numeric: true, max: 5 }) : null,
+        thaiField('taxId', 'Tax ID (13 digits)', 'e.g. 0105566120449', { numeric: true, max: 17 })) : null,
+      thaiField('house', 'House No. / Building / Room', 'e.g. 88 The Parq, Room 08-138'),
+      h('div', { class: 'row-2' }, thaiField('moo', 'Moo', 'e.g. Moo 5 / หมู่ 5', { optional: true }),
+                                   thaiField('soi', 'Soi', 'e.g. Soi 31 / ซอย 31', { optional: true })),
+      thaiField('road', 'Road', 'e.g. Ratchadaphisek Road / ถนนรัชดาภิเษก', { optional: true }),
+      thaiField('sub', 'Sub-district (Khwaeng / Tambon)', 'e.g. Khlong Toei / แขวงคลองเตย'),
+      thaiField('district', 'District (Khet / Amphoe)', 'e.g. Khlong Toei / เขตคลองเตย'),
+      h('div', { class: 'row-2' }, thaiField('province', 'Province', 'e.g. Bangkok / กรุงเทพฯ'),
+                                   thaiField('postcode', 'Postcode', '10110', { numeric: true, max: 5 })),
+      h('p', { class: 'hint' }, 'English or Thai is fine. It prints in this order under BILL TO.')
+    ];
+  }
+
+  /** Why the Thai details can't be saved yet, or ''. */
+  function thaiProblem() {
+    const t = state.th;
+    if (isCompany()) {
+      if (t.office === 'Branch' && !/^\d{1,5}$/.test(t.branchNo.trim())) return 'Add the branch number (up to 5 digits).';
+      if (!/^\d{13}$/.test(t.taxId.replace(/\D/g, ''))) return 'The Tax ID must be 13 digits.';
+    }
+    for (const [k, label] of [['house', 'house no. / building'], ['sub', 'sub-district'], ['district', 'district'], ['province', 'province']]) {
+      if (!t[k].trim()) return `Add the ${label}.`;
+    }
+    if (!/^\d{5}$/.test(t.postcode.trim())) return 'The postcode must be 5 digits.';
+    return '';
+  }
+
   function detailFields() {
+    if (thaiMode()) {
+      return [...thaiFields(),
+        h('label', { for: 'f-email' }, 'Email ', h('span', { class: 'opt' }, '(optional)')),
+        h('input', { id: 'f-email', type: 'email', value: state.email, placeholder: 'name@company.com', inputmode: 'email',
+                     oninput: (e) => { state.email = e.target.value; } })];
+    }
     return [
       h('label', { for: 'f-address' }, 'Billing address'),
       h('textarea', { id: 'f-address', rows: 3, placeholder: 'Street, unit\nSingapore 123456', oninput: (e) => { state.address = e.target.value; } },
@@ -357,6 +438,7 @@
   function clearCustomer() {
     state.customer = null;
     state.name = ''; state.address = ''; state.email = ''; state.terms = '';
+    state.th = blankThai();
     state.editDetails = false;
     state.originalPrices = false;
     reprice();
@@ -546,7 +628,12 @@
     nextBtn.disabled = true;
     nextBtn.replaceChildren('Sending…');
     const form = {
-      customer: { name: state.customer ? state.customer.name : state.name.trim(), address: state.address, email: state.email.trim() },
+      customer: { name: state.customer ? state.customer.name : state.name.trim(), address: state.address, email: state.email.trim(),
+                  type: state.customer ? '' : state.customerType,
+                  ...(thaiMode() && isCompany() ? {
+                    taxId: state.th.taxId.replace(/\D/g, ''),
+                    branch: state.th.office === 'Branch' ? state.th.branchNo.trim().padStart(5, '0') : 'Head Office'
+                  } : {}) },
       items: state.items.map(({ name, code, qty }) => ({ name, code, qty })),
       country: state.country.code,
       docType: state.docType, po: state.po.trim(),
@@ -586,7 +673,7 @@
         { code: 'SG', name: 'Singapore', flag: '🇸🇬', currency: 'SGD', taxRate: 1.09, ready: true },
         { code: 'HK', name: 'Hong Kong', flag: '🇭🇰', currency: 'HKD', taxRate: 1, ready: true },
         { code: 'MY', name: 'Malaysia', flag: '🇲🇾', currency: 'MYR', taxRate: 1, ready: false },
-        { code: 'TH', name: 'Thailand', flag: '🇹🇭', currency: 'THB', taxRate: 1, ready: false }
+        { code: 'TH', name: 'Thailand', flag: '🇹🇭', currency: 'THB', taxRate: 1.07, ready: true, hasCopies: true, thaiAddress: true }
       ],
       products: [
         { name: 'Sonos Ace White', code: '8717755779999', prices: { SG: 499, HK: 2988 } },
