@@ -17,7 +17,7 @@
   const W = window.Telegram && window.Telegram.WebApp;
   const tg = W && W.platform && W.platform !== 'unknown' ? W : null;
   const DEMO = /[?&]demo=1\b/.test(location.search);
-  const VERSION = '21 Oct 2026 (TH)';          // shown on the first step, to check the newest form is loaded
+  const VERSION = '20 Oct 2026 (access)';          // shown on the first step, to check the newest form is loaded
   const initData = tg ? tg.initData : '';
 
   const STEPS = ['country', 'customer', 'items', 'details', 'review'];
@@ -37,6 +37,7 @@
     originalPrices: false,           // true = ignore this customer's special prices this time
     customerType: 'Company',         // new customers only: Company or Individual
     th: blankThai(),                 // new Thai customers: address parts + tax details
+    nameCheck: null,                 // customer list hidden: { name, known } from the server
     targetId: ''
   };
 
@@ -125,7 +126,10 @@
       tg.BackButton.onClick(goBack);
     }
     try {
-      if (DEMO) data = demoData();
+      if (DEMO) {
+        data = demoData();
+        if (/[?&]hidden=1/.test(location.search)) { data.customers = []; data.customersHidden = true; }
+      }
       else if (!initData) throw new Error('Open this form from the bot in Telegram.');
       else data = await post('/api/catalog', { initData });
     } catch (e) {
@@ -151,7 +155,21 @@
 
   /* Navigation ---------------------------------------------------------- */
 
-  function goNext() {
+  async function goNext() {
+    if (STEPS[step] === 'customer' && listHidden() && !state.customer && state.name.trim() && !checkedName()) {
+      if (busy) return;
+      busy = true; nextBtn.disabled = true;
+      try {
+        const out = DEMO ? { known: ['tom', 'harmonyaudiopteltd'].includes(norm(state.name)) }
+                         : await post('/api/catalog', { initData, checkName: state.name.trim() });
+        state.nameCheck = { name: norm(state.name), known: !!out.known };
+      } catch (e) {
+        busy = false; nextBtn.disabled = false;
+        return showError(e.message);
+      }
+      busy = false; nextBtn.disabled = false;
+      if (!state.nameCheck.known) { render(); return; }   // stay: show the new-customer boxes
+    }
     const err = validate(STEPS[step]);
     if (err) { showError(err); if (tg) try { tg.HapticFeedback.notificationOccurred('error'); } catch (e) {} return; }
     if (step === STEPS.length - 1) return submit();
@@ -171,7 +189,11 @@
     if (name === 'country' && !state.country) return 'Choose a country.';
     if (name === 'customer') {
       if (!state.name.trim()) return 'Type or pick the customer first.';
-      if (thaiMode()) {
+      if (savedButHidden()) {
+        // a saved customer: their own details are used, nothing more to ask
+      } else if (listHidden() && !state.customer && !checkedName()) {
+        return 'Press Next again to check the customer.';
+      } else if (thaiMode()) {
         const problem = thaiProblem();
         if (problem) return problem;
         state.address = thaiAddressText();          // what the review step and the invoice show
@@ -277,6 +299,7 @@
   /* Step 2: customer ---------------------------------------------------- */
 
   function customerStep() {
+    if (listHidden()) return hiddenCustomerStep();
     const intro = [h('h1', {}, 'Who is this for?'),
                    h('p', { class: 'lead' }, 'Pick a saved customer or type a new name.')];
 
@@ -331,8 +354,17 @@
              taxId: '', office: 'Head Office', branchNo: '' };
   }
 
+  /**
+   * Not on the Access tab: the saved customer list is hidden, so the name is
+   * checked with the server, which answers only "saved" or "not saved".
+   */
+  const listHidden = () => !!data.customersHidden;
+  const checkedName = () => !!state.nameCheck && state.nameCheck.name === norm(state.name);
+  const savedButHidden = () => listHidden() && !state.customer && checkedName() && state.nameCheck.known;
+  const newButHidden = () => listHidden() && !state.customer && checkedName() && !state.nameCheck.known;
+
   /** A new customer in a country that uses the Thai address format. */
-  const thaiMode = () => !state.customer && !!state.country && !!state.country.thaiAddress;
+  const thaiMode = () => !state.customer && !savedButHidden() && !!state.country && !!state.country.thaiAddress;
   const isCompany = () => !(state.country && state.country.hasCopies) || state.customerType === 'Company';
 
   /** The parts in the Thai tax-invoice order, as the address lines printed under BILL TO. */
@@ -382,6 +414,40 @@
     }
     if (!/^\d{5}$/.test(t.postcode.trim())) return 'The postcode must be 5 digits.';
     return '';
+  }
+
+  /** The customer step for someone who can't see the saved list. */
+  function hiddenCustomerStep() {
+    const input = h('input', {
+      type: 'text', value: state.name, placeholder: 'Customer or company name', autocomplete: 'off',
+      'aria-label': 'Customer name',
+      oninput: (e) => {
+        state.name = e.target.value;
+        const card = document.getElementById('hidden-status');
+        if (card) card.hidden = !checkedName();
+        const nf = document.getElementById('new-fields');
+        if (nf) nf.hidden = !newButHidden();
+      }
+    });
+    setTimeout(() => input.focus(), 50);
+    return [
+      h('h1', {}, 'Who is this for?'),
+      h('p', { class: 'lead' }, 'Type the customer\'s full name. If they are already saved, their details are used automatically.'),
+      h('div', { class: 'card' }, input,
+        h('div', { id: 'hidden-status', class: 'hint', style: 'margin-top:8px', hidden: !checkedName() },
+          savedButHidden() ? '✓ Saved customer: their address, terms and discount will be used.'
+                           : 'Not a saved customer yet: add their details below.')),
+      h('div', { class: 'card', id: 'new-fields', hidden: !newButHidden() },
+        h('h2', {}, 'New customer'),
+        state.country && state.country.hasCopies ? h('div', {},
+          h('label', {}, 'Company or individual?'),
+          h('div', { class: 'chips', role: 'group' }, ...['Company', 'Individual'].map((t) =>
+            h('button', { class: 'chip', type: 'button', 'aria-pressed': String(state.customerType === t),
+              onclick: () => { state.customerType = t; haptic(); render(); } }, t))),
+          h('p', { class: 'hint', style: 'margin:6px 0 0' }, 'Companies get an original and a copy.')) : null,
+        ...detailFields(),
+        h('p', { class: 'hint' }, 'Saved to the Customers tab for next time.'))
+    ];
   }
 
   function detailFields() {
@@ -600,7 +666,9 @@
       h('p', { class: 'lead' }, 'You will get a message in Telegram once it is approved.'),
       h('div', { class: 'card' }, h('h2', {}, `${state.country.flag} ${state.country.name} ${state.docType.toLowerCase()} for`),
         h('div', { style: 'font-weight:600' }, state.customer ? state.customer.name : state.name.trim()),
-        h('div', { class: 'hint', style: 'white-space:pre-line' }, [state.address, state.email].filter(Boolean).join('\n')),
+        h('div', { class: 'hint', style: 'white-space:pre-line' }, savedButHidden()
+          ? 'Saved customer: their saved address, terms and discount will be used.'
+          : [state.address, state.email].filter(Boolean).join('\n')),
         h('div', { class: 'hint', style: 'margin-top:6px' },
           [(state.customer && state.customer.terms) || data.defaultTerms || 'Cash Before Delivery', state.po && 'PO ' + state.po]
             .filter(Boolean).join(' · '))),
@@ -629,7 +697,7 @@
     nextBtn.replaceChildren('Sending…');
     const form = {
       customer: { name: state.customer ? state.customer.name : state.name.trim(), address: state.address, email: state.email.trim(),
-                  type: state.customer ? '' : state.customerType,
+                  type: state.customer || savedButHidden() ? '' : state.customerType,
                   ...(thaiMode() && isCompany() ? {
                     taxId: state.th.taxId.replace(/\D/g, ''),
                     branch: state.th.office === 'Branch' ? state.th.branchNo.trim().padStart(5, '0') : 'Head Office'

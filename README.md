@@ -201,6 +201,28 @@ the arrow keys nudge them.
 
 Try it without logging in, with made-up data: `studio.html?demo=1` (nothing is saved).
 
+## Private bot
+
+Telegram bots can always be found by search, so the bot itself turns strangers away.
+Only **admins** and **members of your groups** can use it: anyone else gets "This bot is
+private" and the form won't load, so they never see customers, prices or margins.
+"Your groups" are the groups on the Bot Chats tab plus any group that has made a request on
+the Tracker. Membership is checked with Telegram (remembered for 10 minutes), so removing
+someone from the group removes their access.
+
+Also turn off **@BotFather → your bot → Bot Settings → Allow Groups?** so nobody can add the
+bot to a group of their own to get in. Turn it on briefly when you add the bot to a new
+group yourself, then send `/invoice` there once so it's registered.
+
+### Who sees the customer list
+
+Only **admins** and people on the **Access** tab (created by `/api/setup`) see saved customers
+in the form. One row per person: **Telegram** (their @username, or Telegram ID) | Name |
+Email (for your own reference). Delete the row to take access away (takes up to 2 minutes).
+Everyone else in your groups can still request invoices: they type the customer's name, and
+the form only tells them whether it's a saved customer. If it is, the saved address, terms and
+margin are used; if not, they enter the new customer's details.
+
 ## What lives where
 
 | File | What it does |
@@ -213,6 +235,7 @@ Try it without logging in, with made-up data: `studio.html?demo=1` (nothing is s
 | `api/setup.js` | One-time setup and health check |
 | `api/google-auth.js` | One-time Google Drive sign-in |
 | `lib/config.js` | Tab names, column names, choices |
+| `lib/access.js` | Who may use the bot (admins + members of your groups) and see customers (Access tab) |
 | `lib/countries.js` | Reads the Countries tab (what each column means) |
 | `public/render/` | The invoice drawing code and templates, shared by the server and the Studio |
 | `public/studio.*`, `api/studio.js` | Template Studio |

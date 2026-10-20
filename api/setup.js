@@ -9,10 +9,11 @@ import { CONFIG, env, appUrl, adminIds } from '../lib/config.js';
 import { parseCountries } from '../lib/countries.js';
 import crypto from 'node:crypto';
 import { tg } from '../lib/telegram.js';
-import { readTables, headerIndex, normKey } from '../lib/sheets.js';
+import { readTables, headerIndex, normKey, ensureSheet } from '../lib/sheets.js';
 import { parseCustomerPrices, parsePriceBook } from '../lib/invoice.js';
 import { ensureTrackerColumns } from '../lib/workflow.js';
 import { driveConfigured, driveCheck } from '../lib/drive.js';
+import { yourGroups, accessList, ACCESS_HEADERS } from '../lib/access.js';
 
 export default async function handler(req, res) {
   // Compare fixed-length hashes so the check takes the same time either way
@@ -140,6 +141,16 @@ export default async function handler(req, res) {
                `or a "${CONFIG.CUSTOMER_PRICES_SHEET}" tab (Customer | Product | Price)`);
     }
     }
+
+    // Private bot: who gets in
+    const groups = await yourGroups();
+    ok(`Private: only admins and members of your ${groups.length} group(s) can use the bot and the form`);
+    if (await ensureSheet(CONFIG.ACCESS_SHEET, ACCESS_HEADERS)) {
+      ok(`Created the "${CONFIG.ACCESS_SHEET}" tab: add the Telegram @usernames of people who may see the customer list`);
+    } else {
+      ok(`Customer list visible to admins + ${(await accessList()).size} person(s) on the "${CONFIG.ACCESS_SHEET}" tab`);
+    }
+    if (!groups.length) out.push('⚠️ No groups found yet, so only admins can use the form. Send /invoice once in each group to register it.');
 
     if (!driveConfigured()) {
       out.push('⚠️ Google Drive: not set up, so the Tracker gets the app\'s own PDF links. ' +

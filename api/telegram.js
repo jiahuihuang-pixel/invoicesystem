@@ -26,6 +26,7 @@ import {
   approve, reject, isClosed, adminButtons, requestConversion, declineConversion, convertToInvoice
 } from '../lib/workflow.js';
 import { readJson } from '../lib/http.js';
+import { isAllowed, PRIVATE_MESSAGE } from '../lib/access.js';
 
 const REJECT_PROMPT = /Why is #(\S+) being rejected\?/;
 let botUsername = process.env.TELEGRAM_BOT_USERNAME || '';
@@ -82,6 +83,12 @@ async function onMessage(msg) {
 
   if (!cmd) return;
   if (chat.type !== 'private') await rememberChat(chat).catch((e) => console.warn(e.message));
+
+  // Private bot: in a private chat, strangers only get /whoami and a polite no.
+  // (In your groups only members can post, so nothing to check there.)
+  if (chat.type === 'private' && cmd.toLowerCase() !== 'whoami' && !(await isAllowed(msg.from.id))) {
+    return send(chat.id, PRIVATE_MESSAGE);
+  }
 
   switch (cmd.toLowerCase()) {
     case 'start':

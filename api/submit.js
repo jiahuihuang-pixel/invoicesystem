@@ -4,7 +4,8 @@
  * and sends it to you in the background.
  */
 import { waitUntil } from '@vercel/functions';
-import { verifyInitData, send, esc, mention, httpError } from '../lib/telegram.js';
+import { verifyInitData, send, esc, mention, httpError, groupFromStartParam } from '../lib/telegram.js';
+import { isAllowed, PRIVATE_MESSAGE } from '../lib/access.js';
 import { submitRequest, notifyAdmins } from '../lib/workflow.js';
 import { readJson, fail, targetOptions } from '../lib/http.js';
 
@@ -13,6 +14,8 @@ export default async function handler(req, res) {
     if (req.method !== 'POST') return res.status(405).json({ ok: false, error: 'POST only' });
     const body = await readJson(req);
     const init = verifyInitData(body.initData);
+    // Private bot: only admins and members of your groups get past here
+    if (!(await isAllowed(init.user.id, groupFromStartParam(init.start_param)))) throw httpError(403, PRIVATE_MESSAGE);
     const form = body.form || {};
 
     const { options } = await targetOptions(init);
