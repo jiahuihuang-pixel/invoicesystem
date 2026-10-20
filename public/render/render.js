@@ -186,7 +186,7 @@ export async function renderInvoicePdf(inv, { loadFont = fetchFont } = {}) {
 export const ITEMS_PER_PAGE = 20;
 
 async function drawSingapore(inv, tools) {
-  const per = inv.itemsPerPage || ITEMS_PER_PAGE;
+  const per = inv.itemsPerPage || Math.max(1, Math.round(num((resolveTemplate(inv.country).table || {}).itemsPerPage, ITEMS_PER_PAGE)));
   const items = inv.lines.filter((l) => !l.isDiscount);
   const pages = [];
   for (let i = 0; i < items.length; i += per) pages.push(items.slice(i, i + per));
@@ -297,54 +297,84 @@ async function drawPage(inv, { text, para, line, box, fill, image, bold, fontFor
   const LB = T.labels || {};
 
   /* ---- Bill to ----------------------------------------------------- */
-  spot(['labels', 'billTo'], 65.8, 151.1 + shift, text(f(LB.billTo), 65.8, 151.1, { size: 6.8, font: bold }), 8.2);
+  const BT = T.billTo || {};
+  const btX = num(BT.x, 65.8), btVX = num(BT.valueX, 124.8), btTop = num(BT.top, 151.1), btSize = num(BT.size, 6.8);
+  const btW = num(BT.width, 230);
+  const blTop = btTop;
   // A company with a Tax ID is shown with its Head Office / Branch, as Thai
   // tax invoices require; "00001" style numbers become "Branch 00001".
   const branchRaw = String(inv.customerBranch || '').trim();
   const branch = !branchRaw ? (inv.customerTaxId ? f(LB.headOffice) : '')
     : /^\d+$/.test(branchRaw) ? (/^0+$/.test(branchRaw) ? f(LB.headOffice) : `${f(LB.branch)} ${branchRaw.padStart(5, '0')}`)
     : branchRaw;
-  text(inv.customer + (branch ? ` (${branch})` : ''), 124.8, 151.1, { size: 6.8, font: bold, maxWidth: 230 });
   const billLines = [...String(inv.address || '').split(/\r?\n/), inv.email,
                      inv.customerTaxId ? `${f(LB.taxId)} ${inv.customerTaxId}` : '']
     .map((s) => String(s || '').trim()).filter(Boolean).slice(0, 6);
-  const billStep = billLines.length > 5 ? 7.3 : 8.1;          // six lines still clear the table
-  billLines.forEach((s, i) => text(s, 124.8, 161.3 + i * billStep, { size: 6.8, maxWidth: 230 }));
+  const billStep = (billLines.length > 5 ? 7.3 : 8.1) * btSize / 6.8;   // six lines still clear the table
+  spot(['billTo'], btX, blTop + shift, btVX - btX + btW, btSize * 1.5 + 10.2 * btSize / 6.8 + billLines.length * billStep, 'billTo');
+  spot(['labels', 'billTo'], btX, btTop + shift, text(f(LB.billTo), btX, btTop, { size: btSize, font: bold }), btSize * 1.2);
+  text(inv.customer + (branch ? ` (${branch})` : ''), btVX, btTop, { size: btSize, font: bold, maxWidth: btW });
+  billLines.forEach((s, i) => text(s, btVX, btTop + 10.2 * btSize / 6.8 + i * billStep, { size: btSize, maxWidth: btW }));
 
   /* ---- Invoice no / PO / date / terms ------------------------------ */
+  const DT = T.details || {};
+  const dLR = num(DT.labelRight, 431.1), dVX = num(DT.valueX, 476.6), dR = num(DT.right, 522.1);
+  const dTop = num(DT.top, 151.1), dStep = num(DT.step, 10.23), dSize = num(DT.size, 6.8);
   const meta = [[LB.invoiceNo, inv.invoiceId, 'invoiceNo'], [LB.po, inv.po, 'po'], [LB.date, formatDate(inv.date), 'date'],
                 [LB.terms, inv.terms, 'terms']]
     .filter(([, value, k]) => k !== 'po' || String(value || '').trim());   // no PO number, no PO line
+  spot(['details'], dLR - 45, dTop + shift, dR - dLR + 45, meta.length * dStep, 'details');
   meta.forEach(([label, value, k], i) => {
-    const t = 151.1 + i * 10.23;
-    const lw = text(f(label), 431.1, t, { size: 6.8, align: 'right' });
-    spot(['labels', k], 431.1 - lw, t + shift, lw, 8.2);
-    text(value, 476.6, t, { size: 6.8, align: 'center', maxWidth: 88 });
-    line(431.1, t + 8.9, 522.1, t + 8.9, 0.43);
+    const t = dTop + i * dStep;
+    const lw = text(f(label), dLR, t, { size: dSize, align: 'right' });
+    spot(['labels', k], dLR - lw, t + shift, lw, dSize * 1.2);
+    text(value, dVX, t, { size: dSize, align: 'center', maxWidth: Math.max(20, 2 * Math.min(dVX - dLR, dR - dVX) - 2) });
+    line(dLR, t + dSize * 1.31, dR, t + dSize * 1.31, 0.43);
   });
 
   /* ---- Items table, stretched to fill the page ----------------------- */
   // Everything below the table (totals, bank details, notes, signatures,
   // footnote) is measured first; the table then runs down to meet it, so
   // the footer sits near the bottom of the A4 page. The table always has
-  // room for its rows at the sheet's spacing (at least 13 of them); if that
-  // plus the footer is taller than A4, the whole page is shrunk to fit.
+  // room for its rows at the template's spacing (at least minRows of them);
+  // if that plus the footer is taller than A4, the whole page is shrunk to fit.
+  const TB = T.table || {};
+  const cols = TB.columns || [];
+  COLS.length = 0;
+  COLS.push(num(TB.left, 64.1));
+  cols.forEach((c) => COLS.push(COLS[COLS.length - 1] + Math.max(8, num(c.width, 60))));
+  TABLE.left = COLS[0]; TABLE.right = COLS[COLS.length - 1];
+  TABLE.top = num(TB.top, 208.5); TABLE.headBottom = TABLE.top + num(TB.headHeight, 16.7);
+  const rowH = num(TB.rowHeight, ROW_H);
+  const tSize = num(TB.size, 6.3), tColor = hex(TB.textColor, BLACK);
+  const TO = T.totals || {};
+  const totStep = num(TO.rowHeight, 10.27);
+  const below = 3 * totStep + 28;                            // totals + currency note, before the footer starts
   const F = T.footer || {};
   const PAGE_BOTTOM = H - 30 - shift;                       // 30pt margin, in the moved-down coordinates
   const footerHeight = drawFooter(0, true);
-  const natural = TABLE.headBottom + Math.max(13, pg.lines.length) * ROW_H;
-  TABLE.bottom = Math.max(natural, PAGE_BOTTOM - 58.8 - footerHeight);
-  const needed = TABLE.bottom + 58.8 + footerHeight + 30 + shift;   // how tall this page is, before shrinking
-  const TOTALS = [0, 10.3, 20.5, 30.8].map((d) => TABLE.bottom + d);   // SUB-TOTAL / GST / GRAND TOTAL rows
+  const natural = TABLE.headBottom + Math.max(num(TB.minRows, 13), pg.lines.length) * rowH;
+  TABLE.bottom = Math.max(natural, PAGE_BOTTOM - below - footerHeight);
+  const needed = TABLE.bottom + below + footerHeight + 30 + shift;   // how tall this page is, before shrinking
+  const TOTALS = [0, 1, 2, 3].map((d) => TABLE.bottom + num(TO.gap, 0) + d * totStep);   // SUB-TOTAL / GST / GRAND TOTAL rows
 
-  fill(TABLE.left, TABLE.top, TABLE.right, TABLE.headBottom, HEAD_FILL);
+  fill(TABLE.left, TABLE.top, TABLE.right, TABLE.headBottom, hex(TB.headFill, HEAD_FILL));
   box(TABLE.left, TABLE.top, TABLE.right, TABLE.bottom);
   line(TABLE.left, TABLE.headBottom, TABLE.right, TABLE.headBottom);
   COLS.slice(1, -1).forEach((x) => line(x, TABLE.top, x, TABLE.bottom));
 
   const mid = (i) => (COLS[i] + COLS[i + 1]) / 2;
-  ['S/N', 'DESCRIPTION', 'UNIT QUANTITY', 'UNIT PRICE', 'AMOUNT']
-    .forEach((h, i) => text(h, mid(i), 215.7, { align: 'center' }));
+  // Where a cell's text goes for its column's alignment
+  const cellX = (i, align) => align === 'center' ? mid(i) : align === 'right' ? COLS[i + 1] - 4 : COLS[i] + 1.3;
+  const headTop = TABLE.top + (TABLE.headBottom - TABLE.top) / 2 - 1.15 - (num(TB.headSize, 6.3) - 6.3) * 0.5;
+  spot(['table'], TABLE.left, TABLE.headBottom + shift, TABLE.right - TABLE.left,
+       Math.min(TABLE.bottom - TABLE.headBottom, Math.max(3, pg.lines.length) * rowH), 'table');
+  cols.forEach((c, i) => {
+    text(f(c.label), mid(i), headTop, { size: num(TB.headSize, 6.3), align: 'center', color: hex(TB.headColor, BLACK),
+                                               font: TB.headBold ? bold : undefined, maxWidth: COLS[i + 1] - COLS[i] - 2 });
+    spot(['table', 'columns', i], COLS[i], TABLE.top + shift, COLS[i + 1] - COLS[i], TABLE.headBottom - TABLE.top, 'column');
+    if (i > 0) spot(['table', 'divider', i], COLS[i] - 3, TABLE.top + shift, 0.1, TABLE.bottom - TABLE.top, 'divider');
+  });
 
   // Accounting format, like the sheet: "$" (or HKD, MYR...) on the left,
   // figure on the right, negatives in brackets with the ")" hanging past
@@ -352,26 +382,28 @@ async function drawPage(inv, { text, para, line, box, fill, image, bold, fontFor
   const sym = String(inv.country.symbol || '$').trim();
   const amountCell = (n, dollarX, rightX, t, opts = {}) => {
     if (n == null) return;
-    text(sym, dollarX, t, opts);
-    text(n < 0 ? `(${money(n)})` : money(n), n < 0 ? rightX + 2.1 : rightX, t, { ...opts, align: 'right' });
+    text(sym, dollarX, t, { size: tSize, color: tColor, ...opts });
+    text(n < 0 ? `(${money(n)})` : money(n), n < 0 ? rightX + 2.1 : rightX, t, { size: tSize, color: tColor, ...opts, align: 'right' });
   };
+  const al = (i) => (cols[i] && cols[i].align) || ['center', 'left', 'center'][i];
+  const cell = (i, s, t) => text(s, cellX(i, al(i)), t, { size: tSize, color: tColor, align: al(i), maxWidth: COLS[i + 1] - COLS[i] - 4 });
 
-  const rowH = ROW_H;
   pg.lines.forEach((l, i) => {
-    const t = TABLE.headBottom + rowH * 0.56 + i * rowH;
-    text(String(pg.start + i + 1), mid(0), t, { align: 'center' });
-    text(l.description, 124.8, t, { maxWidth: COLS[2] - 124.8 - 2 });
-    if (l.qty != null) text(String(l.qty), mid(2), t, { align: 'center' });
-    if (l.unit != null) amountCell(l.unit, 361.4, 425.7, t);
-    if (l.amount != null) amountCell(l.amount, 434.9, 516.3, t);
-    else if (!l.isDiscount) text('price?', 516.3, t, { align: 'right' });   // not on the Product list
+    const t = TABLE.headBottom + rowH * 0.56 + i * rowH - (tSize - 6.3) * 0.5;
+    cell(0, String(pg.start + i + 1), t);
+    cell(1, l.description, t);
+    if (l.qty != null) cell(2, String(l.qty), t);
+    if (l.unit != null) amountCell(l.unit, COLS[3] + 3.3, COLS[4] - 5.9, t);
+    if (l.amount != null) amountCell(l.amount, COLS[4] + 3.3, COLS[5] - 5.8, t);
+    else if (!l.isDiscount) text('price?', COLS[5] - 5.8, t, { size: tSize, align: 'right' });   // not on the Product list
   });
 
   if (pg.pages > 1) {
-    text(`Page ${pg.page + 1} of ${pg.pages}`, RIGHT, Math.max(H, needed) - 24 - shift, { size: 6.3, align: 'right' });
+    text(f(LB.pageOf).replace('{page}', pg.page + 1).replace('{pages}', pg.pages),
+         RIGHT, Math.max(H, needed) - 24 - shift, { size: 6.3, align: 'right' });
   }
   if (!lastPage) {
-    text('Continued on next page', 516.3, TABLE.bottom + 4, { font: bold, align: 'right' });
+    text(f(LB.continued), COLS[5] - 5.8, TABLE.bottom + 4, { font: bold, align: 'right' });
     return needed;
   }
 
@@ -380,21 +412,26 @@ async function drawPage(inv, { text, para, line, box, fill, image, bold, fontFor
   // on the bottom row, so the currency note beside it stays put.
   const taxRate = inv.country.taxRate || 1;
   const taxPct = Math.round((taxRate - 1) * 1000) / 10;
+  const taxName = String(inv.country.taxName || 'GST');
+  const taxLabel = f(String(TO.tax ?? '{Rate}% {TAX NAME}').replace(/\{Rate\}/gi, taxPct)
+    .replace(/\{TAX NAME\}/g, taxName.toUpperCase()));
   const rows = taxRate > 1
-    ? [['SUB-TOTAL', inv.subtotal], [`${taxPct}% ${String(inv.country.taxName || 'GST').toUpperCase()}`, inv.gst], ['GRAND TOTAL', inv.total]]
-    : [['GRAND TOTAL', inv.total]];
+    ? [[f(TO.subtotal), inv.subtotal, 'subtotal'], [taxLabel, inv.gst, 'tax'], [f(TO.grandTotal), inv.total, 'grandTotal']]
+    : [[f(TO.grandTotal), inv.total, 'grandTotal']];
   const firstRow = TOTALS.length - 1 - rows.length;          // index of the top edge
   box(COLS[3], TOTALS[firstRow], TABLE.right, TOTALS[3]);
   line(COLS[4], TOTALS[firstRow], COLS[4], TOTALS[3]);
   for (let i = firstRow + 1; i < 3; i++) line(COLS[3], TOTALS[i], TABLE.right, TOTALS[i]);
-  rows.forEach(([label, n], i) => {
-    const t = TOTALS[firstRow + i] + 1.0;
-    text(label, 429.0, t, { font: bold, align: 'right' });
-    amountCell(n, 434.9, 516.3, t);
+  const totSize = num(TO.size, 6.3);
+  rows.forEach(([label, n, k], i) => {
+    const t = TOTALS[firstRow + i] + 1.0 + (totStep - 10.27) / 2 - (totSize - 6.3) * 0.5;
+    const lw = text(label, COLS[4] - 2.6, t, { size: totSize, font: TO.bold === false ? undefined : bold, align: 'right' });
+    spot(['totals', k], COLS[4] - 2.6 - lw, t + shift, lw, totSize * 1.2);
+    amountCell(n, COLS[4] + 3.3, COLS[5] - 5.8, t, { size: totSize });
   });
   spot(['labels', 'currencyNote'], 65.8, TABLE.bottom + 22.1 + shift,
        text(f(LB.currencyNote), 65.8, TABLE.bottom + 22.1, { font: bold }), 7.6);
-  drawFooter(TABLE.bottom + 58.8, false);
+  drawFooter(TABLE.bottom + below, false);
   return needed;
 
   /* ---- Footer: bank details, notes, signatures, footnote ------------ */

@@ -181,7 +181,42 @@ function buildPanel() {
       text(['labels', 'currencyNote'], 'Currency note (beside the totals)'),
       h('p', { class: 'hint' }, 'Buyer tax details, printed for customers with a Tax ID on the Customers tab:'),
       h('div', { class: 'row' }, text(['labels', 'taxId'], 'Tax ID label'), text(['labels', 'headOffice'], 'Head office'),
-                                 text(['labels', 'branch'], 'Branch'))),
+                                 text(['labels', 'branch'], 'Branch')),
+      h('div', { class: 'row' }, text(['labels', 'continued'], 'Continued (long invoices)'),
+                                 text(['labels', 'pageOf'], 'Page number', 'Page {page} of {pages}'))),
+
+    section('Customer & invoice details', false,
+      h('p', { class: 'hint' }, 'BILL TO on the left, invoice no. / date / terms on the right. You can also drag them on the page.'),
+      h('div', { class: 'row' }, number(['billTo', 'x'], 'Bill to: left'), number(['billTo', 'valueX'], 'Name starts at'),
+                                 number(['billTo', 'top'], 'Top')),
+      h('div', { class: 'row' }, number(['billTo', 'size'], 'Size'), number(['billTo', 'width'], 'Width', 5)),
+      h('div', { class: 'row' }, number(['details', 'labelRight'], 'Details: labels end at'), number(['details', 'valueX'], 'Values centred at'),
+                                 number(['details', 'right'], 'Lines end at')),
+      h('div', { class: 'row' }, number(['details', 'top'], 'Top'), number(['details', 'step'], 'Line spacing'),
+                                 number(['details', 'size'], 'Size'))),
+
+    section('Table', false,
+      h('p', { class: 'hint' }, 'Click a heading on the page to rename it; drag the lines between columns to resize them.'),
+      h('div', { class: 'row' }, number(['table', 'left'], 'Left'), number(['table', 'top'], 'Top'),
+                                 number(['table', 'rowHeight'], 'Row height'), number(['table', 'size'], 'Text size')),
+      h('div', { class: 'row' }, number(['table', 'minRows'], 'Min rows', 1), number(['table', 'itemsPerPage'], 'Items per page', 1),
+                                 color(['table', 'textColor'], 'Text colour', '#000000')),
+      h('div', { class: 'row' }, number(['table', 'headHeight'], 'Heading height'), number(['table', 'headSize'], 'Heading size'),
+                                 color(['table', 'headFill'], 'Heading fill', '#d8d8d8'), color(['table', 'headColor'], 'Heading text', '#000000')),
+      h('div', { class: 'checks' }, check(['table', 'headBold'], 'Bold headings')),
+      ...(tpl.table.columns || []).map((c, i) => h('div', { class: 'item' },
+        h('div', { class: 'item-head' }, h('span', { class: 'n' }, `Column ${i + 1}`)),
+        h('div', { class: 'row' }, text(['table', 'columns', i, 'label'], 'Heading'), number(['table', 'columns', i, 'width'], 'Width', 1),
+          i <= 2 ? h('label', { class: 'f' }, 'Align', h('select', {
+            onchange: (e) => { setPath(['table', 'columns', i, 'align'], e.target.value); changed(); } },
+            ...['left', 'center', 'right'].map((v) => { const o = h('option', { value: v }, v); o.selected = c.align === v; return o; }))) : null)))),
+
+    section('Totals', false,
+      h('div', { class: 'row' }, text(['totals', 'subtotal'], 'Sub-total'), text(['totals', 'tax'], 'Tax', '{Rate}% {TAX NAME}'),
+                                 text(['totals', 'grandTotal'], 'Grand total')),
+      h('div', { class: 'row' }, number(['totals', 'size'], 'Size'), number(['totals', 'rowHeight'], 'Row height'),
+                                 number(['totals', 'gap'], 'Space above')),
+      h('div', { class: 'checks' }, check(['totals', 'bold'], 'Bold labels', true))),
 
     section('Footer', true,
       h('div', { class: 'checks' }, check(['footer', 'showBank'], 'Show bank details', true)),
@@ -267,13 +302,14 @@ async function renderNow() {
 
 const k = () => ($('#page').clientWidth || 800) / PAGE_W;          // CSS pixels per point
 const same = (a, b) => !!a && !!b && a.join('.') === b.join('.');
-const MOVABLE = { logo: 1, header: 1, stamp: 1, title: 1 };
+const MOVABLE = { logo: 1, header: 1, stamp: 1, title: 1, billTo: 1, details: 1, table: 1, divider: 1 };
 const pct = (v, of) => (v / of * 100) + '%';
 
 function drawSpots() {
   const layer = $('#spots');
   layer.replaceChildren(...spots.map((sp) => {
-    const el = h('div', { class: 'spot' + (MOVABLE[sp.kind] ? ' move' : '') + (same(sp.path, selected) ? ' sel' : ''),
+    const el = h('div', { class: 'spot' + (MOVABLE[sp.kind] ? ' move' : '') + (sp.kind === 'divider' ? ' divider' : '') +
+                                   (same(sp.path, selected) ? ' sel' : ''),
                           title: describe(sp.path) });
     // In % of the page, so the boxes stay put when the window is resized
     Object.assign(el.style, { left: pct(sp.x - 2, PAGE_W), top: pct(sp.top - 2, PAGE_H),
@@ -292,6 +328,12 @@ function describe(path) {
   if (a === 'title') return `Title (${b})`;
   if (a === 'labels') return { billTo: 'Bill to label', invoiceNo: 'Invoice no. label', po: 'PO label', date: 'Date label',
                                terms: 'Terms label', currencyNote: 'Currency note' }[b] || 'Label';
+  if (a === 'billTo') return 'Customer (bill to)';
+  if (a === 'details') return 'Invoice no. / date / terms';
+  if (a === 'table' && b === 'columns') return `Column: ${(tpl.table.columns[c] || {}).label || c + 1}`;
+  if (a === 'table' && b === 'divider') return 'Column width (drag sideways)';
+  if (a === 'table') return 'Items table';
+  if (a === 'totals') return { subtotal: 'Sub-total label', tax: 'Tax label', grandTotal: 'Grand total label' }[b] || 'Totals';
   if (a === 'footer') return { bankTitle: 'Bank heading', bank: 'Bank lines', notes: 'Notes', footnote: 'Footnote' }[b] ||
                              (b === 'signatures' ? `Signature ${c + 1}` : 'Footer');
   return path.join(' › ');
@@ -300,22 +342,35 @@ function describe(path) {
 
 /* Click to select, drag to move ------------------------------------------- */
 
-/** What dragging an item changes: the whole letterhead moves together. */
+/** What dragging an item changes: [path, default] pairs moved together. */
 function moveTarget(sp) {
-  if (sp.kind === 'logo') return { x: ['logo', 'x'], y: ['logo', 'top'], dx: 58.5, dy: 72.6 };
-  if (sp.kind === 'header') return { x: ['header', 'x'], y: ['header', 'top'], dx: 124.8, dy: 70.2 };
-  if (sp.kind === 'stamp') return { x: ['stamp', 'right'], y: ['stamp', 'top'], dx: 522.1, dy: sp.top };
-  if (sp.kind === 'title') return { x: ['title', 'x'], y: ['title', 'gap'], dx: 65.8, dy: 7 };
+  if (sp.kind === 'logo') return { xs: [[['logo', 'x'], 58.5]], ys: [[['logo', 'top'], 72.6]] };
+  if (sp.kind === 'header') return { xs: [[['header', 'x'], 124.8]], ys: [[['header', 'top'], 70.2]] };
+  if (sp.kind === 'stamp') return { xs: [[['stamp', 'right'], 522.1]], ys: [[['stamp', 'top'], sp.top]] };
+  if (sp.kind === 'title') return { xs: [[['title', 'x'], 65.8]], ys: [[['title', 'gap'], 7]] };
+  if (sp.kind === 'billTo') return { xs: [[['billTo', 'x'], 65.8], [['billTo', 'valueX'], 124.8]], ys: [[['billTo', 'top'], 151.1]] };
+  if (sp.kind === 'details') return { xs: [[['details', 'labelRight'], 431.1], [['details', 'valueX'], 476.6], [['details', 'right'], 522.1]],
+                                      ys: [[['details', 'top'], 151.1]] };
+  if (sp.kind === 'table') return { xs: [[['table', 'left'], 64.1]], ys: [[['table', 'top'], 208.5]] };
   return null;
 }
 
+const round = (n) => Math.round(n * 2) / 2;                       // half points
+
 function nudge(sp, dxPt, dyPt) {
+  if (sp.kind === 'divider') {
+    // The line between two columns: one gets wider, the other narrower
+    const cols = tpl.table.columns, i = sp.path[2];
+    const d = Math.max(8 - cols[i - 1].width, Math.min(dxPt, cols[i].width - 8));
+    cols[i - 1].width = round(cols[i - 1].width + d);
+    cols[i].width = round(cols[i].width - d);
+    changed(); schedulePanel();
+    return;
+  }
   const t = moveTarget(sp);
   if (!t) return;
-  const round = (n) => Math.round(n * 2) / 2;                     // half points
-  const gx = getPath(t.x), gy = getPath(t.y);
-  setPath(t.x, round((gx == null ? t.dx : gx) + dxPt));
-  setPath(t.y, round((gy == null ? t.dy : gy) + dyPt));
+  for (const [path, def] of t.xs) { const v = getPath(path); setPath(path, round((v == null ? def : v) + dxPt)); }
+  for (const [path, def] of t.ys) { const v = getPath(path); setPath(path, round((v == null ? def : v) + dyPt)); }
   changed();
   schedulePanel();                                                 // show the new numbers there too
 }
@@ -331,14 +386,14 @@ function startDrag(e, sp, el) {
     if (!MOVABLE[sp.kind]) return;
     moved = true;
     el.classList.add('dragging');
-    el.style.transform = `translate(${dx}px, ${dy}px)`;
+    el.style.transform = sp.kind === 'divider' ? `translateX(${dx}px)` : `translate(${dx}px, ${dy}px)`;
   };
   const onUp = (ev) => {
     el.removeEventListener('pointermove', onMove);
     el.removeEventListener('pointerup', onUp);
     if (moved) {
       const s = k();
-      nudge(sp, (ev.clientX - x0) / s, (ev.clientY - y0) / s);
+      nudge(sp, (ev.clientX - x0) / s, sp.kind === 'divider' ? 0 : (ev.clientY - y0) / s);
       select(sp.path);
     } else {
       select(sp.path);
@@ -363,6 +418,7 @@ document.addEventListener('keydown', (e) => {
   if (!sp || !MOVABLE[sp.kind]) return;
   const step = e.shiftKey ? 5 : 0.5;
   const d = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] }[e.key];
+  if (d && sp.kind === 'divider') d[1] = 0;
   if (d) { e.preventDefault(); nudge(sp, d[0], d[1]); }
 });
 
@@ -394,6 +450,17 @@ function popToggle(path, label, cls) {
   return h('button', { class: 'toggle ' + cls + (on ? ' on' : ''), type: 'button', title: label,
     onclick: (e) => { setPath(path, !getPath(path)); e.currentTarget.classList.toggle('on'); changed(true); } },
     cls === 'b' ? 'B' : 'I');
+}
+
+function popColor(path, label, fallback) {
+  return h('label', { class: 'f' }, label, h('input', { type: 'color', value: getPath(path) || fallback,
+    oninput: (e) => { setPath(path, e.target.value); changed(true); } }));
+}
+
+function alignButtons(path) {
+  return h('div', { class: 'chips', role: 'group', title: 'Alignment' }, ...[['left', '⟸'], ['center', '≡'], ['right', '⟹']].map(([v, sym]) =>
+    h('button', { class: 'toggle' + (getPath(path) === v ? ' on' : ''), type: 'button', title: 'Align ' + v,
+      onclick: () => { setPath(path, v); changed(true); buildPop(); } }, sym)));
 }
 
 function buildPop() {
@@ -429,6 +496,36 @@ function buildPop() {
     body.push(h('div', { class: 'tools-row' }, popNumber(['title', 'size'], 'Size', 14)));
   } else if (a === 'labels') {
     body.push(popText(p, 'Text'));
+  } else if (a === 'billTo') {
+    body.push(popText(['labels', 'billTo'], 'Label'));
+    body.push(h('div', { class: 'tools-row' }, popNumber(['billTo', 'size'], 'Size', 6.8), popNumber(['billTo', 'width'], 'Width', 230, 5)));
+    body.push(h('p', { class: 'hint' }, 'Drag to move. The customer\'s name and address come from the request.'));
+  } else if (a === 'details') {
+    body.push(h('div', { class: 'tools-row' }, popNumber(['details', 'size'], 'Size', 6.8),
+      popNumber(['details', 'step'], 'Line spacing', 10.23), popNumber(['details', 'right'], 'Line ends at', 522.1, 1)));
+    body.push(h('p', { class: 'hint' }, 'Drag to move. Click a label to change its wording.'));
+  } else if (a === 'table' && b === 'columns') {
+    body.push(popText([...p, 'label'], 'Heading'));
+    body.push(h('div', { class: 'tools-row' }, popNumber([...p, 'width'], 'Width', 60, 1),
+      c <= 2 ? alignButtons([...p, 'align']) : null));
+    body.push(h('p', { class: 'hint' }, 'Drag the line between two columns to change both widths.'));
+  } else if (a === 'table' && b === 'divider') {
+    const cols = tpl.table.columns;
+    body.push(h('div', { class: 'tools-row' }, popNumber(['table', 'columns', c - 1, 'width'], `${cols[c - 1].label} width`, 60, 1),
+      popNumber(['table', 'columns', c, 'width'], `${cols[c].label} width`, 60, 1)));
+  } else if (a === 'table') {
+    body.push(h('div', { class: 'tools-row' }, popNumber(['table', 'rowHeight'], 'Row height', 19.65),
+      popNumber(['table', 'size'], 'Text size', 6.3), popNumber(['table', 'minRows'], 'Min rows', 13, 1),
+      popNumber(['table', 'itemsPerPage'], 'Items per page', 20, 1)));
+    body.push(h('div', { class: 'tools-row' }, popNumber(['table', 'headHeight'], 'Heading height', 16.7),
+      popNumber(['table', 'headSize'], 'Heading size', 6.3), popToggle(['table', 'headBold'], 'Bold headings', 'b'),
+      popColor(['table', 'headFill'], 'Heading fill', '#d8d8d8')));
+    body.push(h('p', { class: 'hint' }, 'Drag to move the table. Click a heading to rename or resize a column.'));
+  } else if (a === 'totals') {
+    body.push(popText(p, describe(p)));
+    if (b === 'tax') body.push(h('p', { class: 'hint' }, '{Rate} becomes e.g. 9, {TAX NAME} becomes GST / VAT.'));
+    body.push(h('div', { class: 'tools-row' }, popNumber(['totals', 'size'], 'Size', 6.3),
+      popNumber(['totals', 'rowHeight'], 'Row height', 10.27), popToggle(['totals', 'bold'], 'Bold', 'b')));
   } else if (a === 'footer' && b === 'signatures') {
     body.push(popText([...p, 'label'], 'Label under the line'));
     actions.push(h('button', { class: 'icon', type: 'button', title: 'Remove this signature line',

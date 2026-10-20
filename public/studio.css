@@ -87,3 +87,5 @@ details.sec[open] > summary::before { transform: rotate(90deg); }
   .split { grid-template-columns: 1fr; grid-template-rows: 60vh auto; }
   .panel { border-left: 0; border-top: 1px solid var(--line); }
 }
+.spot.divider { cursor: col-resize; border: 0; border-radius: 0; }
+.spot.divider:hover, .spot.divider.sel, .spot.divider.dragging { background: var(--accent); opacity: .6; }

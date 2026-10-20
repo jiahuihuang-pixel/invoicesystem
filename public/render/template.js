@@ -68,7 +68,27 @@ export function defaultTemplate(country) {
     labels: { billTo: 'BILL TO', invoiceNo: 'Invoice No:', po: 'PO No.:', date: 'Date:', terms: 'Terms:',
               currencyNote: '{Currency Note}',
               // The buyer's tax details, printed when the customer has them (Thai tax invoices)
-              taxId: 'Tax ID:', headOffice: 'Head Office', branch: 'Branch' },
+              taxId: 'Tax ID:', headOffice: 'Head Office', branch: 'Branch',
+              continued: 'Continued on next page', pageOf: 'Page {page} of {pages}' },
+    // The customer block (BILL TO) and the invoice no / date / terms block
+    billTo: { x: 65.8, valueX: 124.8, top: 151.1, size: 6.8, width: 230 },
+    details: { labelRight: 431.1, valueX: 476.6, right: 522.1, top: 151.1, step: 10.23, size: 6.8 },
+    // The items table. Columns stay in this order; their headings, widths
+    // and alignment can change. The table is as wide as its columns.
+    table: {
+      left: 64.1, top: 208.5, headHeight: 16.7, rowHeight: 19.65, minRows: 13, itemsPerPage: 20,
+      size: 6.3, headSize: 6.3, headBold: false, headColor: '#000000', headFill: '#d8d8d8', textColor: '#000000',
+      columns: [
+        { key: 'sn', label: 'S/N', width: 59.4, align: 'center' },
+        { key: 'description', label: 'DESCRIPTION', width: 175.6, align: 'left' },
+        { key: 'qty', label: 'UNIT QUANTITY', width: 59, align: 'center' },
+        { key: 'unit', label: 'UNIT PRICE', width: 73.5, align: 'right' },
+        { key: 'amount', label: 'AMOUNT', width: 90.5, align: 'right' }
+      ]
+    },
+    // {Rate} and {Tax Name} are filled in, e.g. "9% GST"
+    totals: { subtotal: 'SUB-TOTAL', tax: '{Rate}% {TAX NAME}', grandTotal: 'GRAND TOTAL', size: 6.3, bold: true,
+              rowHeight: 10.27, gap: 0 },
     footer: {
       showBank: true,
       bankTitle: 'BANK ACCOUNT DETAILS:',
@@ -88,7 +108,12 @@ export function defaultTemplate(country) {
 
 /** The country's template: its saved changes laid over the default. */
 export function resolveTemplate(country) {
-  return merge(defaultTemplate(country), country.template || {});
+  const t = merge(defaultTemplate(country), country.template || {});
+  // Columns are matched by key, so a saved list missing one gets it back
+  const base = defaultTemplate(country).table.columns;
+  const saved = Array.isArray(t.table.columns) ? t.table.columns : [];
+  t.table.columns = base.map((d, i) => ({ ...d, ...(saved.find((c) => c && c.key === d.key) || saved[i] || {}), key: d.key }));
+  return t;
 }
 
 function merge(base, over) {
