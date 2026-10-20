@@ -78,6 +78,8 @@ export default async function handler(req, res) {
           ['Company Name', C.name], ['Reg No Label', C.regLabel], ['GST Reg No', C.gstRegNo], ['Address', C.store],
           ['Tel', C.tel], ['Website', C.website], ['Email', C.email], ['Stamp', C.stamp], ['Copies', (C.copies || []).join(' + ')], ['Invoice Title', C.invoiceTitle]
         ].map(([k, v]) => `${k}=${v ? '"' + (v.length > 40 ? v.slice(0, 40) + '…' : v) + '"' : '(blank)'}`).join(', '));
+        if ((C.copies || []).length > 1) ok(`${c.name}: companies get ${C.copies.length} copies in one PDF (${C.copies.join(', ')}); individuals get one`);
+        else if (c.code === 'TH') out.push(`⚠️ ${c.name}: no original + copy. Type  <ORIGINAL>, <COPY>  in the Copies column of the Countries tab`);
         } else out.push(`⚠️ ${c.name}: not ready, greyed out in the form` +
                       (c.missing.length ? ` (Countries tab is missing ${c.missing.join(', ')})` : ' (Ready is not ticked)'));
       }
