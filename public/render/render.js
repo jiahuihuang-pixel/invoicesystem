@@ -195,9 +195,11 @@ async function drawSingapore(inv, tools) {
 
   // Countries tab "Copies", e.g. "<ORIGINAL>, <COPY>": the whole invoice
   // again for each, stamped with that text. Otherwise one copy, normal stamp.
-  // Only companies get them: an individual gets one copy with no stamp at all.
+  // Only companies with an address get them: an individual, or a customer
+  // with no address, gets one copy with no stamp at all.
   const set = (inv.country.company && inv.country.company.copies) || [];
-  const copies = !set.length ? [null] : inv.customerType === 'Individual' ? [''] : set;
+  const plain = inv.customerType === 'Individual' || !String(inv.address || '').trim();
+  const copies = !set.length ? [null] : plain ? [''] : set;
   let firstPage = true;
   for (let c = 0; c < copies.length; c++) {
     let start = 0;

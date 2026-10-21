@@ -17,7 +17,7 @@
   const W = window.Telegram && window.Telegram.WebApp;
   const tg = W && W.platform && W.platform !== 'unknown' ? W : null;
   const DEMO = /[?&]demo=1\b/.test(location.search);
-  const VERSION = '20 Oct 2026 (access)';          // shown on the first step, to check the newest form is loaded
+  const VERSION = '21 Oct 2026 (same chat)';          // shown on the first step, to check the newest form is loaded
   const initData = tg ? tg.initData : '';
 
   const STEPS = ['country', 'customer', 'items', 'details', 'review'];
@@ -197,7 +197,7 @@
         const problem = thaiProblem();
         if (problem) return problem;
         state.address = thaiAddressText();          // what the review step and the invoice show
-      } else if (!state.customer && !state.address.trim()) return 'Add a billing address for this new customer.';
+      }
       if (state.email && !/^\S+@\S+\.\S+$/.test(state.email.trim())) return 'That email address does not look right.';
     }
     if (name === 'items') {
@@ -311,7 +311,7 @@
             h('div', { class: 'name' }, c.name),
             h('div', { class: 'details' }, [c.address, c.email, c.terms].filter(Boolean).join('\n') || 'No details saved yet'),
             c.margin ? h('span', { class: 'badge' }, `${round2(c.margin * 100)}% off list for this customer`) : null,
-            state.country && state.country.hasCopies && c.type === 'Individual' ? h('span', { class: 'badge' }, 'Individual: one copy') : null),
+            state.country && state.country.hasCopies && (c.type === 'Individual' || !String(c.address || '').trim()) ? h('span', { class: 'badge' }, 'One copy, no ORIGINAL / COPY') : null),
           h('button', { class: 'linkbtn', type: 'button', onclick: () => { clearCustomer(); render(); } }, 'Change')),
         h('div', { style: 'margin-top:12px' },
           h('button', { class: 'linkbtn', type: 'button', onclick: () => { state.editDetails = true; render(); } },
@@ -339,7 +339,7 @@
             h('div', { class: 'chips', role: 'group' }, ...['Company', 'Individual'].map((t) =>
               h('button', { class: 'chip', type: 'button', 'aria-pressed': String(state.customerType === t),
                 onclick: () => { state.customerType = t; haptic(); render(); } }, t))),
-            h('p', { class: 'hint', style: 'margin:6px 0 0' }, 'Companies get an original and a copy.')) : null,
+            h('p', { class: 'hint', style: 'margin:6px 0 0' }, 'Companies with an address get an original and a copy.')) : null,
           ...detailFields(),
           h('p', { class: 'hint' }, 'Saved to the Customers tab for next time.'));
 
@@ -390,15 +390,15 @@
                         onclick: () => { t.office = o; haptic(); render(); } }, o))),
         t.office === 'Branch' ? thaiField('branchNo', 'Branch No.', 'e.g. 00001', { numeric: true, max: 5 }) : null,
         thaiField('taxId', 'Tax ID (13 digits)', 'e.g. 0105566120449', { numeric: true, max: 17 })) : null,
-      thaiField('house', 'House No. / Building / Room', 'e.g. 88 The Parq, Room 08-138'),
+      thaiField('house', 'House No. / Building / Room', 'e.g. 88 The Parq, Room 08-138', { optional: true }),
       h('div', { class: 'row-2' }, thaiField('moo', 'Moo', 'e.g. Moo 5 / หมู่ 5', { optional: true }),
                                    thaiField('soi', 'Soi', 'e.g. Soi 31 / ซอย 31', { optional: true })),
       thaiField('road', 'Road', 'e.g. Ratchadaphisek Road / ถนนรัชดาภิเษก', { optional: true }),
-      thaiField('sub', 'Sub-district (Khwaeng / Tambon)', 'e.g. Khlong Toei / แขวงคลองเตย'),
-      thaiField('district', 'District (Khet / Amphoe)', 'e.g. Khlong Toei / เขตคลองเตย'),
-      h('div', { class: 'row-2' }, thaiField('province', 'Province', 'e.g. Bangkok / กรุงเทพฯ'),
-                                   thaiField('postcode', 'Postcode', '10110', { numeric: true, max: 5 })),
-      h('p', { class: 'hint' }, 'English or Thai is fine. It prints in this order under BILL TO.')
+      thaiField('sub', 'Sub-district (Khwaeng / Tambon)', 'e.g. Khlong Toei / แขวงคลองเตย', { optional: true }),
+      thaiField('district', 'District (Khet / Amphoe)', 'e.g. Khlong Toei / เขตคลองเตย', { optional: true }),
+      h('div', { class: 'row-2' }, thaiField('province', 'Province', 'e.g. Bangkok / กรุงเทพฯ', { optional: true }),
+                                   thaiField('postcode', 'Postcode', '10110', { numeric: true, max: 5, optional: true })),
+      h('p', { class: 'hint' }, 'English or Thai is fine. It prints in this order under BILL TO. Without an address, the invoice has no ORIGINAL / COPY.')
     ];
   }
 
@@ -409,10 +409,8 @@
       if (t.office === 'Branch' && !/^\d{1,5}$/.test(t.branchNo.trim())) return 'Add the branch number (up to 5 digits).';
       if (!/^\d{13}$/.test(t.taxId.replace(/\D/g, ''))) return 'The Tax ID must be 13 digits.';
     }
-    for (const [k, label] of [['house', 'house no. / building'], ['sub', 'sub-district'], ['district', 'district'], ['province', 'province']]) {
-      if (!t[k].trim()) return `Add the ${label}.`;
-    }
-    if (!/^\d{5}$/.test(t.postcode.trim())) return 'The postcode must be 5 digits.';
+    // The address is optional; only a postcode that was typed is checked
+    if (t.postcode.trim() && !/^\d{5}$/.test(t.postcode.trim())) return 'The postcode must be 5 digits.';
     return '';
   }
 
@@ -444,7 +442,7 @@
           h('div', { class: 'chips', role: 'group' }, ...['Company', 'Individual'].map((t) =>
             h('button', { class: 'chip', type: 'button', 'aria-pressed': String(state.customerType === t),
               onclick: () => { state.customerType = t; haptic(); render(); } }, t))),
-          h('p', { class: 'hint', style: 'margin:6px 0 0' }, 'Companies get an original and a copy.')) : null,
+          h('p', { class: 'hint', style: 'margin:6px 0 0' }, 'Companies with an address get an original and a copy.')) : null,
         ...detailFields(),
         h('p', { class: 'hint' }, 'Saved to the Customers tab for next time.'))
     ];
@@ -458,7 +456,7 @@
                      oninput: (e) => { state.email = e.target.value; } })];
     }
     return [
-      h('label', { for: 'f-address' }, 'Billing address'),
+      h('label', { for: 'f-address' }, 'Billing address ', h('span', { class: 'opt' }, '(optional)')),
       h('textarea', { id: 'f-address', rows: 3, placeholder: 'Street, unit\nSingapore 123456', oninput: (e) => { state.address = e.target.value; } },
         state.address),
       h('label', { for: 'f-email' }, 'Email ', h('span', { class: 'opt' }, '(optional)')),
@@ -759,7 +757,7 @@
       docTypes: ['Invoice', 'Quotation', 'Proforma Invoice'],
       defaultTerms: 'Cash Before Delivery',
       maxItems: 12,
-      targets: { fixed: false, options: [{ id: '-1001', title: 'Harmony Audio x TC' }, { id: '1', title: 'Me (private chat)' }] }
+      targets: { fixed: true, options: [{ id: '-1001', title: 'Harmony Audio x TC' }] }
     };
   }
 
